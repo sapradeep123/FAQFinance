@@ -14,6 +14,7 @@ import chatRoutes from './routes/chat';
 import portfolioRoutes from './routes/portfolio';
 import adminRoutes from './routes/admin';
 import faqRoutes from './routes/faq';
+import financialDataRoutes from './routes/financialData';
 
 const app = express();
 
@@ -168,6 +169,7 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/faq', faqRoutes);
+app.use('/api/financial-data', financialDataRoutes);
 
 // API documentation endpoint
 app.get('/api', (req, res) => {

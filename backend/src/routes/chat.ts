@@ -473,11 +473,37 @@ router.post('/threads/:threadId/messages',
         data: {
           userMessage: result.userMessage,
           assistantMessage: result.assistantMessage,
-          inquiry: result.inquiry
+          inquiry: result.inquiry,
+          validationResult: result.validationResult
         }
       });
     } catch (error: any) {
-      // Log failed message send
+      // Handle prompt validation errors specially
+      if (error.statusCode === 400 && error.data?.validationResult) {
+        // Log validation failure
+        await adminService.logUsage(
+          '/api/chat/threads/:threadId/messages',
+          'POST',
+          400,
+          Date.now() - startTime,
+          req.user?.userId,
+          req.ip,
+          req.get('User-Agent'),
+          'Non-financial content detected'
+        );
+
+        return res.status(400).json({
+          success: false,
+          message: 'Non-financial content detected',
+          error: {
+            type: 'VALIDATION_ERROR',
+            validationResult: error.data.validationResult,
+            systemMessage: error.data.systemMessage
+          }
+        });
+      }
+
+      // Log other failed message sends
       await adminService.logUsage(
         '/api/chat/threads/:threadId/messages',
         'POST',

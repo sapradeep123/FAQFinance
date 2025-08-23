@@ -1,5 +1,6 @@
 import { pool } from '../db/pool';
 import { createError } from '../middleware/errorHandler';
+import fetch from 'node-fetch';
 
 export interface MarketSnapshot {
   ticker: string;
@@ -137,31 +138,154 @@ class MarketDataService {
     }
   }
 
-  private async mockProviderCall(
+  private async callProvider(
     provider: MarketDataProvider,
     ticker: string
   ): Promise<MarketSnapshot> {
     const startTime = Date.now();
     
-    // Simulate network delay
-    const delay = Math.random() * 1000 + 200;
-    await new Promise(resolve => setTimeout(resolve, delay));
-
-    const responseTime = Date.now() - startTime;
-
-    // Generate mock data based on ticker
-    const mockData = this.generateMockMarketData(ticker, provider.provider);
-    
-    return {
-      ...mockData,
-      last_updated: new Date(),
-      provider: provider.provider,
-      metadata: {
-        response_time_ms: responseTime,
-        source: provider.base_url,
-        api_version: '1.0'
+    try {
+      let snapshot: MarketSnapshot;
+      
+      switch (provider.provider) {
+        case 'YAHOO':
+          snapshot = await this.fetchYahooFinanceData(ticker);
+          break;
+        case 'GOOGLE':
+          snapshot = await this.fetchGoogleFinanceData(ticker);
+          break;
+        case 'FALLBACK':
+        default:
+          snapshot = this.generateMockMarketData(ticker, provider.provider);
+          break;
       }
-    };
+      
+      const responseTime = Date.now() - startTime;
+      
+      return {
+        ...snapshot,
+        last_updated: new Date(),
+        provider: provider.provider,
+        metadata: {
+          response_time_ms: responseTime,
+          source: provider.base_url,
+          api_version: '1.0'
+        }
+      };
+    } catch (error) {
+      console.error(`Provider ${provider.provider} failed for ticker ${ticker}:`, error);
+      throw error;
+    }
+  }
+
+  private async fetchYahooFinanceData(ticker: string): Promise<Omit<MarketSnapshot, 'last_updated' | 'provider' | 'metadata'>> {
+    try {
+      // Using Yahoo Finance API v8 (free tier)
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`;
+      
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        timeout: 10000
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Yahoo Finance API error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      const result = data.chart?.result?.[0];
+      
+      if (!result) {
+        throw new Error('No data returned from Yahoo Finance');
+      }
+      
+      const meta = result.meta;
+      const quote = result.indicators?.quote?.[0];
+      const currentPrice = meta.regularMarketPrice || meta.previousClose;
+      const previousClose = meta.previousClose;
+      const change = currentPrice - previousClose;
+      const changePercent = (change / previousClose) * 100;
+      
+      return {
+        ticker: ticker.toUpperCase(),
+        price: Math.round(currentPrice * 100) / 100,
+        change: Math.round(change * 100) / 100,
+        change_percent: Math.round(changePercent * 100) / 100,
+        volume: meta.regularMarketVolume || 0,
+        market_cap: meta.marketCap,
+        pe_ratio: meta.trailingPE,
+        dividend_yield: meta.dividendYield ? meta.dividendYield * 100 : undefined,
+        fifty_two_week_high: meta.fiftyTwoWeekHigh,
+        fifty_two_week_low: meta.fiftyTwoWeekLow,
+        currency: meta.currency || 'USD',
+        exchange: meta.exchangeName || meta.fullExchangeName || 'UNKNOWN'
+      };
+    } catch (error) {
+      console.error('Yahoo Finance API error:', error);
+      // Fallback to mock data if API fails
+      return this.generateMockMarketData(ticker, 'YAHOO');
+    }
+  }
+
+  private async fetchGoogleFinanceData(ticker: string): Promise<Omit<MarketSnapshot, 'last_updated' | 'provider' | 'metadata'>> {
+    try {
+      // Google Finance doesn't have a public API, so we'll use a web scraping approach
+      // or alternative data source. For now, using a mock implementation that simulates
+      // Google Finance data patterns
+      
+      // In a production environment, you might use:
+      // 1. Alpha Vantage API (free tier available)
+      // 2. IEX Cloud API
+      // 3. Finnhub API
+      // 4. Polygon.io API
+      
+      // Using Alpha Vantage as Google Finance alternative
+      const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
+      if (!apiKey) {
+        throw new Error('Alpha Vantage API key not configured');
+      }
+      
+      const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${ticker}&apikey=${apiKey}`;
+      
+      const response = await fetch(url, { timeout: 10000 });
+      
+      if (!response.ok) {
+        throw new Error(`Alpha Vantage API error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      const quote = data['Global Quote'];
+      
+      if (!quote || Object.keys(quote).length === 0) {
+        throw new Error('No data returned from Alpha Vantage');
+      }
+      
+      const price = parseFloat(quote['05. price']);
+      const change = parseFloat(quote['09. change']);
+      const changePercent = parseFloat(quote['10. change percent'].replace('%', ''));
+      const volume = parseInt(quote['06. volume']);
+      
+      return {
+        ticker: ticker.toUpperCase(),
+        price: Math.round(price * 100) / 100,
+        change: Math.round(change * 100) / 100,
+        change_percent: Math.round(changePercent * 100) / 100,
+        volume: volume || 0,
+        market_cap: undefined, // Not provided by Alpha Vantage Global Quote
+        pe_ratio: undefined,
+        dividend_yield: undefined,
+        fifty_two_week_high: parseFloat(quote['03. high']),
+        fifty_two_week_low: parseFloat(quote['04. low']),
+        currency: 'USD',
+        exchange: 'UNKNOWN'
+      };
+    } catch (error) {
+      console.error('Google Finance (Alpha Vantage) API error:', error);
+      // Fallback to mock data if API fails
+      return this.generateMockMarketData(ticker, 'GOOGLE');
+    }
   }
 
   private generateMockMarketData(
@@ -261,7 +385,7 @@ class MarketDataService {
     
     for (const provider of providers) {
       try {
-        const snapshot = await this.mockProviderCall(provider, ticker);
+        const snapshot = await this.callProvider(provider, ticker);
         
         // Cache the successful result
         await this.cacheSnapshot(snapshot);

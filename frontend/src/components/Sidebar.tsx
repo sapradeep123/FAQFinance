@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { cn } from '../lib/cn'
+import { useAuthStore } from '../stores/useAuthStore'
 
 const navigation = [
   {
@@ -42,6 +43,17 @@ const navigation = [
 ]
 
 export function Sidebar() {
+  const { user } = useAuthStore()
+  
+  // Filter navigation items based on user role
+  const filteredNavigation = navigation.filter(item => {
+    // Hide Admin menu for non-admin users
+    if (item.name === 'Admin' && user?.role !== 'admin') {
+      return false
+    }
+    return true
+  })
+
   return (
     <div className="flex w-64 flex-col bg-card border-r border-border">
       {/* Logo */}
@@ -57,7 +69,7 @@ export function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 px-4 py-6">
         <ul className="space-y-2">
-          {navigation.map((item) => (
+          {filteredNavigation.map((item) => (
             <li key={item.name}>
               <NavLink
                 to={item.href}

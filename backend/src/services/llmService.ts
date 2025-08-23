@@ -1,19 +1,21 @@
 import { pool } from '../db/pool';
 import { createError } from '../middleware/errorHandler';
+import fetch from 'node-fetch';
 
-export interface ApiProvider {
-  id: string;
-  provider: 'YAHOO' | 'GOOGLE' | 'FALLBACK';
-  name: string;
-  base_url: string;
-  status: 'ACTIVE' | 'INACTIVE' | 'ERROR' | 'RATE_LIMITED';
-  priority: number;
-  timeout_ms: number;
-  config: Record<string, any>;
+export interface GptProvider {
+  id: number;
+  provider: 'openai' | 'anthropic' | 'google';
+  api_key: string;
+  model: string;
+  is_active: boolean;
+  max_tokens: number;
+  temperature: number;
+  created_at: Date;
+  updated_at: Date;
 }
 
 export interface ProviderResponse {
-  provider: 'YAHOO' | 'GOOGLE' | 'FALLBACK';
+  provider: 'openai' | 'anthropic' | 'google';
   answer: string;
   confidence: number;
   response_time_ms: number;
@@ -32,57 +34,193 @@ export interface ConsolidatedAnswer {
 }
 
 export interface ProviderRating {
-  provider: 'YAHOO' | 'GOOGLE' | 'FALLBACK';
+  provider: 'openai' | 'anthropic' | 'google';
   correctness_percentage: number;
   reasoning: string;
-  rated_by: 'YAHOO' | 'GOOGLE' | 'FALLBACK';
+  rated_by: 'openai' | 'anthropic' | 'google';
 }
 
 class LLMService {
-  private async getActiveProviders(): Promise<ApiProvider[]> {
+  private async getActiveProviders(): Promise<GptProvider[]> {
     const result = await pool.query(
-      `SELECT id, provider, name, base_url, status, priority, timeout_ms, config
-       FROM api_configs 
-       WHERE status = 'ACTIVE'
-       ORDER BY priority ASC`,
+      `SELECT id, provider, api_key, model, is_active, max_tokens, temperature, created_at, updated_at
+       FROM gpt_configs 
+       WHERE is_active = true
+       ORDER BY provider ASC`,
       []
     );
 
     return result.rows;
   }
 
-  private async mockProviderCall(
-    provider: ApiProvider,
+  private async callProvider(
+    provider: GptProvider,
     question: string,
     context?: string
   ): Promise<ProviderResponse> {
     const startTime = Date.now();
     
-    // Simulate network delay
-    const delay = provider.config.delay_ms || Math.random() * 1000 + 500;
-    await new Promise(resolve => setTimeout(resolve, delay));
-
-    const responseTime = Date.now() - startTime;
-
-    // Mock responses based on provider
-    const mockResponses = this.generateMockResponse(provider.provider, question, context);
-    
-    return {
-      provider: provider.provider,
-      answer: mockResponses.answer,
-      confidence: mockResponses.confidence,
-      response_time_ms: responseTime,
-      tokens_used: Math.floor(Math.random() * 100) + 50,
-      cost_cents: Math.floor(Math.random() * 10) + 1,
-      metadata: {
-        model: mockResponses.model,
-        version: provider.config.version || '1.0'
+    try {
+      let response: any;
+      let answer: string;
+      let tokensUsed = 0;
+      
+      const prompt = context ? `Context: ${context}\n\nQuestion: ${question}` : question;
+      
+      switch (provider.provider) {
+        case 'openai':
+          response = await this.callOpenAI(provider, prompt);
+          answer = response.choices[0]?.message?.content || 'No response generated';
+          tokensUsed = response.usage?.total_tokens || 0;
+          break;
+          
+        case 'anthropic':
+          response = await this.callAnthropic(provider, prompt);
+          answer = response.content[0]?.text || 'No response generated';
+          tokensUsed = response.usage?.input_tokens + response.usage?.output_tokens || 0;
+          break;
+          
+        case 'google':
+          response = await this.callGoogle(provider, prompt);
+          answer = response.candidates[0]?.content?.parts[0]?.text || 'No response generated';
+          tokensUsed = response.usageMetadata?.totalTokenCount || 0;
+          break;
+          
+        default:
+          throw new Error(`Unsupported provider: ${provider.provider}`);
       }
+      
+      const responseTime = Date.now() - startTime;
+      
+      return {
+        provider: provider.provider,
+        answer,
+        confidence: 0.85, // Base confidence for real API responses
+        response_time_ms: responseTime,
+        tokens_used: tokensUsed,
+        cost_cents: this.calculateCost(provider.provider, tokensUsed),
+        metadata: {
+          model: provider.model,
+          temperature: provider.temperature,
+          max_tokens: provider.max_tokens
+        }
+      };
+    } catch (error) {
+      const responseTime = Date.now() - startTime;
+      
+      return {
+        provider: provider.provider,
+        answer: '',
+        confidence: 0,
+        response_time_ms: responseTime,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  private async callOpenAI(provider: GptProvider, prompt: string): Promise<any> {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${provider.api_key}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: provider.model,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a financial advisor AI. Provide helpful, accurate financial advice and information. Focus only on finance-related topics.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        max_tokens: provider.max_tokens,
+        temperature: provider.temperature
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+    }
+
+    return await response.json();
+  }
+
+  private async callAnthropic(provider: GptProvider, prompt: string): Promise<any> {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': provider.api_key,
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: provider.model,
+        max_tokens: provider.max_tokens,
+        temperature: provider.temperature,
+        system: 'You are a financial advisor AI. Provide helpful, accurate financial advice and information. Focus only on finance-related topics.',
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Anthropic API error: ${response.status} ${response.statusText}`);
+    }
+
+    return await response.json();
+  }
+
+  private async callGoogle(provider: GptProvider, prompt: string): Promise<any> {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent?key=${provider.api_key}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: `You are a financial advisor AI. Provide helpful, accurate financial advice and information. Focus only on finance-related topics.\n\n${prompt}`
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: provider.temperature,
+          maxOutputTokens: provider.max_tokens
+        }
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Google API error: ${response.status} ${response.statusText}`);
+    }
+
+    return await response.json();
+  }
+
+  private calculateCost(provider: 'openai' | 'anthropic' | 'google', tokens: number): number {
+    // Rough cost estimates in cents per 1000 tokens
+    const costPer1000Tokens = {
+      openai: 2, // GPT-4 approximate cost
+      anthropic: 1.5, // Claude approximate cost
+      google: 1 // Gemini approximate cost
     };
+
+    return Math.ceil((tokens / 1000) * costPer1000Tokens[provider]);
   }
 
   private generateMockResponse(
-    provider: 'YAHOO' | 'GOOGLE' | 'FALLBACK',
+    provider: 'openai' | 'anthropic' | 'google',
     question: string,
     context?: string
   ): { answer: string; confidence: number; model: string } {
@@ -203,7 +341,7 @@ class LLMService {
     // Call all providers in parallel
     const providerPromises = providers.map(async (provider) => {
       try {
-        return await this.mockProviderCall(provider, question, context);
+        return await this.callProvider(provider, question, context);
       } catch (error) {
         // Return error response for failed providers
         return {
@@ -295,7 +433,7 @@ class LLMService {
   }
 
   private async mockProviderRating(
-    provider: ApiProvider,
+    provider: GptProvider,
     consolidatedAnswer: ConsolidatedAnswer,
     originalQuestion: string
   ): Promise<ProviderRating> {

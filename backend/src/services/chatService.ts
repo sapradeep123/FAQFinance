@@ -1,6 +1,7 @@
 import { pool } from '../db/pool';
 import { createError } from '../middleware/errorHandler';
 import { llmService, ProviderResponse, ConsolidatedAnswer, ProviderRating } from './llmService';
+import { promptFilterService, PromptValidationResult, FinancialContext } from './promptFilterService';
 
 export interface ChatThread {
   id: string;
@@ -165,6 +166,7 @@ class ChatService {
     userMessage: ChatMessage;
     assistantMessage: ChatMessage;
     inquiry: Inquiry;
+    validationResult?: PromptValidationResult;
   }> {
     const client = await pool.connect();
     
@@ -181,22 +183,56 @@ class ChatService {
         throw createError(400, 'Cannot send messages to inactive thread');
       }
 
+      // Validate prompt for financial content
+      const validationResult = await promptFilterService.validatePrompt(messageData.content, userId);
+      
+      if (!validationResult.isValid) {
+        // Create a system message explaining the validation failure
+        const systemMessageResult = await client.query(
+          `INSERT INTO chat_messages (thread_id, role, content, metadata)
+           VALUES ($1, 'SYSTEM', $2, $3)
+           RETURNING id, thread_id, role, content, inquiry_id, created_at, metadata`,
+          [
+            threadId, 
+            `I can only help with finance-related questions. ${validationResult.reasons.join(' ')} ${validationResult.suggestedRewrite || ''}`,
+            JSON.stringify({ validationResult })
+          ]
+        );
+
+        await client.query('COMMIT');
+        
+        throw createError(400, 'Non-financial content detected', {
+          validationResult,
+          systemMessage: systemMessageResult.rows[0]
+        });
+      }
+
+      // Extract financial context for enhanced processing
+      const financialContext = promptFilterService.extractFinancialContext(messageData.content);
+      const enhancedPrompt = promptFilterService.enhancePromptWithContext(messageData.content, financialContext);
+
       // Add user message
       const userMessageResult = await client.query(
-        `INSERT INTO chat_messages (thread_id, role, content)
-         VALUES ($1, 'USER', $2)
+        `INSERT INTO chat_messages (thread_id, role, content, metadata)
+         VALUES ($1, 'USER', $2, $3)
          RETURNING id, thread_id, role, content, inquiry_id, created_at, metadata`,
-        [threadId, messageData.content]
+        [threadId, messageData.content, JSON.stringify({ validationResult, financialContext })]
       );
 
       const userMessage = userMessageResult.rows[0];
 
-      // Create inquiry for processing
+      // Create inquiry for processing with enhanced prompt
       const inquiryResult = await client.query(
-        `INSERT INTO inquiries (thread_id, user_id, question, context, status)
-         VALUES ($1, $2, $3, $4, 'PENDING')
+        `INSERT INTO inquiries (thread_id, user_id, question, context, status, metadata)
+         VALUES ($1, $2, $3, $4, 'PENDING', $5)
          RETURNING id, thread_id, user_id, question, context, status, created_at, updated_at, metadata`,
-        [threadId, userId, messageData.content, messageData.context]
+        [
+          threadId, 
+          userId, 
+          enhancedPrompt, // Use enhanced prompt for AI processing
+          messageData.context, 
+          JSON.stringify({ originalPrompt: messageData.content, financialContext, validationResult })
+        ]
       );
 
       const inquiry = inquiryResult.rows[0];
@@ -219,7 +255,8 @@ class ChatService {
       return {
         userMessage,
         assistantMessage,
-        inquiry
+        inquiry,
+        validationResult
       };
     } catch (error) {
       await client.query('ROLLBACK');

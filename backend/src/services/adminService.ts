@@ -73,6 +73,25 @@ export interface AdminNotification {
   metadata?: Record<string, any>;
 }
 
+export interface GptConfig {
+  id: number;
+  provider: 'openai' | 'anthropic' | 'google';
+  api_key: string;
+  model: string;
+  is_active: boolean;
+  max_tokens?: number;
+  temperature?: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface SystemSettings {
+  key: string;
+  value: string;
+  category?: string;
+  updated_at: Date;
+}
+
 export interface SystemStats {
   total_users: number;
   active_users_24h: number;
@@ -642,6 +661,117 @@ class AdminService {
     } catch (error) {
       throw error;
     }
+  }
+
+  // GPT Configuration Management
+  async getGptConfigs(): Promise<GptConfig[]> {
+    const result = await query(`
+      SELECT id, provider, api_key, model, is_active, max_tokens, temperature, created_at, updated_at
+      FROM gpt_configs
+      ORDER BY provider, created_at DESC
+    `);
+    return result.rows;
+  }
+
+  async createGptConfig(config: Omit<GptConfig, 'id' | 'created_at' | 'updated_at'>): Promise<GptConfig> {
+    const result = await query(`
+      INSERT INTO gpt_configs (provider, api_key, model, is_active, max_tokens, temperature)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, provider, api_key, model, is_active, max_tokens, temperature, created_at, updated_at
+    `, [config.provider, config.api_key, config.model, config.is_active ?? true, config.max_tokens, config.temperature]);
+    
+    if (result.rows.length === 0) {
+      throw createError(500, 'Failed to create GPT configuration');
+    }
+    
+    return result.rows[0];
+  }
+
+  async updateGptConfig(id: number, config: Partial<Omit<GptConfig, 'id' | 'created_at' | 'updated_at'>>): Promise<GptConfig> {
+    const setParts: string[] = [];
+    const values: any[] = [];
+    let paramIndex = 1;
+
+    if (config.provider !== undefined) {
+      setParts.push(`provider = $${paramIndex++}`);
+      values.push(config.provider);
+    }
+    if (config.api_key !== undefined) {
+      setParts.push(`api_key = $${paramIndex++}`);
+      values.push(config.api_key);
+    }
+    if (config.model !== undefined) {
+      setParts.push(`model = $${paramIndex++}`);
+      values.push(config.model);
+    }
+    if (config.is_active !== undefined) {
+      setParts.push(`is_active = $${paramIndex++}`);
+      values.push(config.is_active);
+    }
+    if (config.max_tokens !== undefined) {
+      setParts.push(`max_tokens = $${paramIndex++}`);
+      values.push(config.max_tokens);
+    }
+    if (config.temperature !== undefined) {
+      setParts.push(`temperature = $${paramIndex++}`);
+      values.push(config.temperature);
+    }
+
+    if (setParts.length === 0) {
+      throw createError(400, 'No fields to update');
+    }
+
+    setParts.push(`updated_at = NOW()`);
+    values.push(id);
+
+    const result = await query(`
+      UPDATE gpt_configs 
+      SET ${setParts.join(', ')}
+      WHERE id = $${paramIndex}
+      RETURNING id, provider, api_key, model, is_active, max_tokens, temperature, created_at, updated_at
+    `, values);
+
+    if (result.rows.length === 0) {
+      throw createError(404, 'GPT configuration not found');
+    }
+
+    return result.rows[0];
+  }
+
+  async deleteGptConfig(id: number): Promise<void> {
+    const result = await query('DELETE FROM gpt_configs WHERE id = $1', [id]);
+    
+    if (result.rowCount === 0) {
+      throw createError(404, 'GPT configuration not found');
+    }
+  }
+
+  // System Settings Management
+  async getSystemSettings(): Promise<SystemSettings[]> {
+    const result = await query(`
+      SELECT key, value, category, updated_at
+      FROM system_settings
+      ORDER BY category, key
+    `);
+    return result.rows;
+  }
+
+  async updateSystemSetting(key: string, value: string, category?: string): Promise<SystemSettings> {
+    const result = await query(`
+      INSERT INTO system_settings (key, value, category, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        value = EXCLUDED.value,
+        category = EXCLUDED.category,
+        updated_at = NOW()
+      RETURNING key, value, category, updated_at
+    `, [key, value, category]);
+    
+    if (result.rows.length === 0) {
+      throw createError(500, 'Failed to update system setting');
+    }
+    
+    return result.rows[0];
   }
 }
 

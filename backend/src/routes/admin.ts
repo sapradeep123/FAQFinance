@@ -11,6 +11,50 @@ const router = Router();
 router.use(authenticateToken);
 router.use(requireAdmin);
 
+// GPT API Configuration validation
+const createGptConfigValidation = [
+  body('provider')
+    .trim()
+    .isIn(['openai', 'anthropic', 'google'])
+    .withMessage('Provider must be openai, anthropic, or google'),
+  body('apiKey')
+    .trim()
+    .isLength({ min: 1, max: 500 })
+    .withMessage('API key is required'),
+  body('model')
+    .trim()
+    .isLength({ min: 1, max: 100 })
+    .withMessage('Model is required'),
+  body('isActive')
+    .optional()
+    .isBoolean()
+    .withMessage('isActive must be a boolean'),
+  body('maxTokens')
+    .optional()
+    .isInt({ min: 100, max: 8000 })
+    .withMessage('Max tokens must be between 100 and 8000'),
+  body('temperature')
+    .optional()
+    .isFloat({ min: 0, max: 2 })
+    .withMessage('Temperature must be between 0 and 2')
+];
+
+const updateSystemSettingValidation = [
+  body('key')
+    .trim()
+    .isLength({ min: 1, max: 100 })
+    .withMessage('Key is required'),
+  body('value')
+    .trim()
+    .isLength({ min: 0, max: 5000 })
+    .withMessage('Value must not exceed 5000 characters'),
+  body('category')
+    .optional()
+    .trim()
+    .isLength({ min: 1, max: 50 })
+    .withMessage('Category must be between 1 and 50 characters')
+];
+
 // Validation middleware
 const createApiConfigValidation = [
   body('provider')
@@ -863,6 +907,266 @@ router.get('/rate-limits',
       await adminService.logUsage(
         '/api/admin/rate-limits',
         'GET',
+        error.statusCode || 500,
+        Date.now() - startTime,
+        req.user?.userId,
+        req.ip,
+        req.get('User-Agent'),
+        error.message
+      );
+      throw error;
+    }
+  })
+);
+
+// GPT Configuration Routes
+
+// GET /api/admin/gpt-configs - Get all GPT configurations
+router.get('/gpt-configs',
+  asyncHandler(async (req: Request, res: Response) => {
+    const startTime = Date.now();
+    
+    try {
+      const configs = await adminService.getGptConfigs();
+
+      await adminService.logUsage(
+        '/api/admin/gpt-configs',
+        'GET',
+        200,
+        Date.now() - startTime,
+        req.user!.userId,
+        req.ip,
+        req.get('User-Agent')
+      );
+
+      res.json({
+        success: true,
+        data: configs
+      });
+    } catch (error: any) {
+      await adminService.logUsage(
+        '/api/admin/gpt-configs',
+        'GET',
+        error.statusCode || 500,
+        Date.now() - startTime,
+        req.user?.userId,
+        req.ip,
+        req.get('User-Agent'),
+        error.message
+      );
+      throw error;
+    }
+  })
+);
+
+// POST /api/admin/gpt-configs - Create GPT configuration
+router.post('/gpt-configs',
+  createGptConfigValidation,
+  asyncHandler(async (req: Request, res: Response) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      throw createError(400, 'Validation failed', errors.array());
+    }
+
+    const startTime = Date.now();
+    
+    try {
+      const config = await adminService.createGptConfig(req.body);
+
+      await adminService.logUsage(
+        '/api/admin/gpt-configs',
+        'POST',
+        201,
+        Date.now() - startTime,
+        req.user!.userId,
+        req.ip,
+        req.get('User-Agent')
+      );
+
+      res.status(201).json({
+        success: true,
+        data: config,
+        message: 'GPT configuration created successfully'
+      });
+    } catch (error: any) {
+      await adminService.logUsage(
+        '/api/admin/gpt-configs',
+        'POST',
+        error.statusCode || 500,
+        Date.now() - startTime,
+        req.user?.userId,
+        req.ip,
+        req.get('User-Agent'),
+        error.message
+      );
+      throw error;
+    }
+  })
+);
+
+// PUT /api/admin/gpt-configs/:id - Update GPT configuration
+router.put('/gpt-configs/:id',
+  param('id').isInt().withMessage('ID must be a valid integer'),
+  createGptConfigValidation,
+  asyncHandler(async (req: Request, res: Response) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      throw createError(400, 'Validation failed', errors.array());
+    }
+
+    const startTime = Date.now();
+    
+    try {
+      const config = await adminService.updateGptConfig(parseInt(req.params.id), req.body);
+
+      await adminService.logUsage(
+        `/api/admin/gpt-configs/${req.params.id}`,
+        'PUT',
+        200,
+        Date.now() - startTime,
+        req.user!.userId,
+        req.ip,
+        req.get('User-Agent')
+      );
+
+      res.json({
+        success: true,
+        data: config,
+        message: 'GPT configuration updated successfully'
+      });
+    } catch (error: any) {
+      await adminService.logUsage(
+        `/api/admin/gpt-configs/${req.params.id}`,
+        'PUT',
+        error.statusCode || 500,
+        Date.now() - startTime,
+        req.user?.userId,
+        req.ip,
+        req.get('User-Agent'),
+        error.message
+      );
+      throw error;
+    }
+  })
+);
+
+// DELETE /api/admin/gpt-configs/:id - Delete GPT configuration
+router.delete('/gpt-configs/:id',
+  param('id').isInt().withMessage('ID must be a valid integer'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      throw createError(400, 'Validation failed', errors.array());
+    }
+
+    const startTime = Date.now();
+    
+    try {
+      await adminService.deleteGptConfig(parseInt(req.params.id));
+
+      await adminService.logUsage(
+        `/api/admin/gpt-configs/${req.params.id}`,
+        'DELETE',
+        200,
+        Date.now() - startTime,
+        req.user!.userId,
+        req.ip,
+        req.get('User-Agent')
+      );
+
+      res.json({
+        success: true,
+        message: 'GPT configuration deleted successfully'
+      });
+    } catch (error: any) {
+      await adminService.logUsage(
+        `/api/admin/gpt-configs/${req.params.id}`,
+        'DELETE',
+        error.statusCode || 500,
+        Date.now() - startTime,
+        req.user?.userId,
+        req.ip,
+        req.get('User-Agent'),
+        error.message
+      );
+      throw error;
+    }
+  })
+);
+
+// System Settings Routes
+
+// GET /api/admin/system-settings - Get system settings
+router.get('/system-settings',
+  asyncHandler(async (req: Request, res: Response) => {
+    const startTime = Date.now();
+    
+    try {
+      const settings = await adminService.getSystemSettings();
+
+      await adminService.logUsage(
+        '/api/admin/system-settings',
+        'GET',
+        200,
+        Date.now() - startTime,
+        req.user!.userId,
+        req.ip,
+        req.get('User-Agent')
+      );
+
+      res.json({
+        success: true,
+        data: settings
+      });
+    } catch (error: any) {
+      await adminService.logUsage(
+        '/api/admin/system-settings',
+        'GET',
+        error.statusCode || 500,
+        Date.now() - startTime,
+        req.user?.userId,
+        req.ip,
+        req.get('User-Agent'),
+        error.message
+      );
+      throw error;
+    }
+  })
+);
+
+// PUT /api/admin/system-settings - Update system setting
+router.put('/system-settings',
+  updateSystemSettingValidation,
+  asyncHandler(async (req: Request, res: Response) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      throw createError(400, 'Validation failed', errors.array());
+    }
+
+    const startTime = Date.now();
+    
+    try {
+      const setting = await adminService.updateSystemSetting(req.body.key, req.body.value, req.body.category);
+
+      await adminService.logUsage(
+        '/api/admin/system-settings',
+        'PUT',
+        200,
+        Date.now() - startTime,
+        req.user!.userId,
+        req.ip,
+        req.get('User-Agent')
+      );
+
+      res.json({
+        success: true,
+        data: setting,
+        message: 'System setting updated successfully'
+      });
+    } catch (error: any) {
+      await adminService.logUsage(
+        '/api/admin/system-settings',
+        'PUT',
         error.statusCode || 500,
         Date.now() - startTime,
         req.user?.userId,

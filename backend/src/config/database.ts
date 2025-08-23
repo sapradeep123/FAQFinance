@@ -391,6 +391,69 @@ async function createSQLiteTables(): Promise<void> {
     )
   `);
   
+  // GPT Configurations table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS gpt_configs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL CHECK (provider IN ('openai', 'anthropic', 'google')),
+      api_key TEXT NOT NULL,
+      model TEXT NOT NULL,
+      is_active BOOLEAN DEFAULT true,
+      max_tokens INTEGER DEFAULT 2000 CHECK (max_tokens >= 100 AND max_tokens <= 8000),
+      temperature REAL DEFAULT 0.7 CHECK (temperature >= 0 AND temperature <= 2),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(provider, model)
+    )
+  `);
+
+  // System Settings table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      category TEXT DEFAULT 'general',
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Insert default system settings if table is empty
+  const settingsCount = database.prepare('SELECT COUNT(*) as count FROM system_settings').get();
+  if (settingsCount.count === 0) {
+    const insertSetting = database.prepare(`
+      INSERT INTO system_settings (key, value, category)
+      VALUES (?, ?, ?)
+    `);
+    
+    insertSetting.run('finance_data_sources_enabled', 'true', 'finance');
+    insertSetting.run('yahoo_finance_enabled', 'true', 'finance');
+    insertSetting.run('google_finance_enabled', 'true', 'finance');
+    insertSetting.run('finance_only_responses', 'true', 'ai');
+    insertSetting.run('default_gpt_provider', 'openai', 'ai');
+    insertSetting.run('max_financial_search_results', '10', 'finance');
+    insertSetting.run('financial_data_cache_duration', '300', 'finance');
+    
+    console.log('⚙️ Default system settings inserted');
+  }
+
+  // Insert default GPT configurations if table is empty
+  const gptCount = database.prepare('SELECT COUNT(*) as count FROM gpt_configs').get();
+  if (gptCount.count === 0) {
+    const insertGptConfig = database.prepare(`
+      INSERT INTO gpt_configs (provider, api_key, model, is_active, max_tokens, temperature)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    
+    insertGptConfig.run('openai', 'your-openai-api-key-here', 'gpt-3.5-turbo', 0, 2000, 0.7);
+    insertGptConfig.run('openai', 'your-openai-api-key-here', 'gpt-4', 0, 2000, 0.7);
+    insertGptConfig.run('anthropic', 'your-anthropic-api-key-here', 'claude-3-sonnet-20240229', 0, 2000, 0.7);
+    insertGptConfig.run('anthropic', 'your-anthropic-api-key-here', 'claude-3-haiku-20240307', 0, 2000, 0.7);
+    insertGptConfig.run('google', 'your-google-api-key-here', 'gemini-pro', 0, 2000, 0.7);
+    insertGptConfig.run('google', 'your-google-api-key-here', 'gemini-pro-vision', 0, 2000, 0.7);
+    
+    console.log('🤖 Default GPT configurations inserted');
+  }
+
   database.exec(`
     CREATE TABLE IF NOT EXISTS rate_limits (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
