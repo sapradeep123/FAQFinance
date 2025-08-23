@@ -1,326 +1,255 @@
-# Trae - Financial AI Assistant API
+# Trae AI Financial Assistant
 
-A comprehensive Node.js/TypeScript API for financial portfolio management, market data integration, and AI-powered chat assistance.
+A full-stack financial assistant application with AI-powered chat, portfolio management, and admin dashboard.
 
-## Features
+## 🚀 Features
 
-- **Authentication & Authorization** - JWT-based auth with role-based access control
-- **Portfolio Management** - Upload, analyze, and manage investment portfolios
-- **Market Data Integration** - Real-time data from Yahoo Finance, Google Sheets, and Finnhub
-- **AI Chat Assistant** - Multi-provider LLM integration for financial Q&A
-- **Admin Dashboard** - User management, system metrics, and configuration
-- **FAQ System** - Searchable knowledge base
+- **Authentication System**: Secure login/signup with JWT tokens
+- **AI Chat Interface**: Interactive financial assistant powered by LLM
+- **Portfolio Management**: Track and analyze investment portfolios
+- **Admin Dashboard**: User management and system monitoring
+- **Settings Management**: Customizable user preferences and keyboard shortcuts
+- **Responsive Design**: Modern UI built with React and Tailwind CSS
 
-## Tech Stack
+## 🏗️ Tech Stack
 
-- **Runtime**: Node.js 20+
-- **Language**: TypeScript
+### Backend
+- **Runtime**: Node.js with TypeScript
 - **Framework**: Express.js
-- **Database**: PostgreSQL
-- **Authentication**: JWT
-- **AI/LLM**: OpenAI, Anthropic, Local models
-- **Market Data**: Yahoo Finance, Google Sheets API, Finnhub
+- **Database**: SQLite (development) / PostgreSQL (production)
+- **Authentication**: JWT with bcrypt
+- **API Integration**: Yahoo Finance, Google APIs
 
-## Quick Start
+### Frontend
+- **Framework**: React 18 with TypeScript
+- **Build Tool**: Vite
+- **Styling**: Tailwind CSS + shadcn/ui components
+- **State Management**: Zustand
+- **Routing**: React Router v6
+- **UI Components**: Radix UI primitives
 
-### Prerequisites
+## 📋 Prerequisites
 
-- Node.js 20+
-- PostgreSQL 14+
+- Node.js (v18 or higher)
 - npm or yarn
+- Git
 
-### Installation
+## 🛠️ Installation & Setup
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd Trae
-   ```
+### 1. Clone the Repository
 
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
+```bash
+git clone <repository-url>
+cd Trae
+```
 
-3. **Set up environment variables**
-   ```bash
-   cp .env.example .env
-   ```
-   Edit `.env` with your configuration (see [Environment Variables](#environment-variables))
+### 2. Backend Setup
 
-4. **Set up database**
-   ```bash
-   # Create PostgreSQL database
-   createdb trae_db
-   
-   # Run migrations
-   npm run migrate
-   ```
+```bash
+cd backend
+npm install
+```
 
-5. **Start development server**
-   ```bash
-   npm run dev
-   ```
+Copy the environment file and configure:
+```bash
+cp .env.example .env
+```
 
-   The API will be available at `http://localhost:3000`
-
-## Environment Variables
-
-Copy `.env.example` to `.env` and configure the following:
-
-### Server Configuration
+Edit `.env` file with your configuration:
 ```env
+# Database
+USE_SQLITE=true
+DATABASE_URL=./data/database.sqlite
+
+# Server
+PORT=5000
 NODE_ENV=development
-PORT=3000
-CORS_ORIGIN=http://localhost:3000
-```
 
-### Database
-```env
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=trae_db
-DB_USER=your_db_user
-DB_PASSWORD=your_db_password
-DB_SSL=false
-```
-
-### Authentication
-```env
-JWT_SECRET=your-super-secret-jwt-key-min-32-chars
+# Authentication
+JWT_SECRET=your-super-secret-jwt-key-here
 JWT_EXPIRES_IN=7d
-```
 
-### Rate Limiting
-```env
-RATE_LIMIT_WINDOW_MS=900000
-RATE_LIMIT_MAX_REQUESTS=100
-```
-
-### Market Data APIs
-```env
-# Google Sheets/SerpAPI
-GOOGLE_SHEETS_ID=your_google_sheets_id
-GOOGLE_API_KEY=your_google_api_key
-SERPAPI_KEY=your_serpapi_key
-
-# Finnhub
-FINNHUB_KEY=your_finnhub_api_key
-```
-
-### LLM Providers
-```env
-# OpenAI
-OPENAI_API_KEY=your_openai_api_key
-OPENAI_MODEL=gpt-4
-
-# Anthropic
-ANTHROPIC_API_KEY=your_anthropic_api_key
-ANTHROPIC_MODEL=claude-3-sonnet-20240229
-
-# Local LLM (optional)
-LOCAL_LLM_URL=http://localhost:11434
-LOCAL_LLM_MODEL=llama2
-```
-
-### Admin Account
-```env
+# Admin Account
 ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD=secure_admin_password
+ADMIN_PASSWORD=admin123
+
+# API Keys (Optional - for full functionality)
+YAHOO_FINANCE_API_KEY=your-yahoo-finance-key
+GOOGLE_API_KEY=your-google-api-key
 ```
 
-### Logging
+Start the backend server:
+```bash
+npm run dev
+```
+
+The backend will be available at `http://localhost:5000`
+
+### 3. Frontend Setup
+
+```bash
+cd frontend
+npm install
+```
+
+Copy the environment file:
+```bash
+cp .env.example .env.local
+```
+
+Edit `.env.local` file:
 ```env
-LOG_LEVEL=info
+VITE_API_URL=http://localhost:5000
+VITE_APP_NAME=Trae AI Financial Assistant
 ```
 
-## Database Migrations
-
-The application uses SQL migration files located in `scripts/sql/`:
-
+Start the frontend development server:
 ```bash
-# Run all migrations in order
-npm run migrate
-
-# Or run individual migration files
-psql -d trae_db -f scripts/sql/01_core.sql
-psql -d trae_db -f scripts/sql/02_faq.sql
-psql -d trae_db -f scripts/sql/03_chat.sql
-psql -d trae_db -f scripts/sql/04_portfolio.sql
-psql -d trae_db -f scripts/sql/05_admin.sql
+npm run dev
 ```
 
-## API Endpoints
+The frontend will be available at `http://localhost:5173`
 
-### Authentication
-- `POST /api/auth/register` - User registration
-- `POST /api/auth/login` - User login
-- `POST /api/auth/refresh` - Refresh JWT token
-- `POST /api/auth/logout` - User logout
+## 🔑 Default Login Credentials
 
-### Chat
-- `POST /api/chat/ask` - Ask finance-related questions
-- `GET /api/chat/inquiries` - Get conversation history
+- **Email**: `admin@example.com`
+- **Password**: `admin123`
 
-### Portfolio
-- `POST /api/portfolio/upload` - Upload portfolio data (CSV/XLSX)
-- `GET /api/portfolio/:id/summary` - Get portfolio summary with KPIs
-- `POST /api/portfolio/:id/ask` - Ask portfolio-specific questions
-- `GET /api/portfolio` - List user portfolios
-- `POST /api/portfolio` - Create new portfolio
-- `DELETE /api/portfolio/:id` - Delete portfolio
+> ⚠️ **Security Note**: Change the default admin password in production!
 
-### FAQ
-- `GET /api/faq` - Get FAQ entries
-- `GET /api/faq/search` - Search FAQ entries
+## 📁 Project Structure
 
-### Admin (Admin role required)
-- `GET /api/admin/users` - Get all users
-- `PATCH /api/admin/users/:id/role` - Update user role
-- `GET /api/admin/api-configs` - Get API configurations
-- `PUT /api/admin/api-configs` - Update API configurations
-- `GET /api/admin/metrics` - Get system metrics
-- `GET /api/admin/logs` - Get system logs
+```
+Trae/
+├── backend/                 # Backend API server
+│   ├── src/
+│   │   ├── config/         # Database and app configuration
+│   │   ├── db/             # Database schema and migrations
+│   │   ├── middleware/     # Express middleware
+│   │   ├── routes/         # API route handlers
+│   │   ├── services/       # Business logic services
+│   │   ├── app.ts          # Express app configuration
+│   │   └── server.ts       # Server entry point
+│   ├── scripts/sql/        # SQL schema files
+│   └── package.json
+├── frontend/               # React frontend application
+│   ├── src/
+│   │   ├── components/     # Reusable UI components
+│   │   ├── pages/          # Page components
+│   │   ├── routes/         # Route definitions
+│   │   ├── stores/         # Zustand state stores
+│   │   ├── services/       # API service functions
+│   │   ├── hooks/          # Custom React hooks
+│   │   └── lib/            # Utility functions
+│   └── package.json
+├── .gitignore              # Git ignore rules
+├── .env.example            # Environment template
+└── README.md               # This file
+```
 
-### Health Check
-- `GET /health` - System health status
+## 🚀 Available Scripts
 
-## Development
-
-### Available Scripts
-
+### Backend Scripts
 ```bash
-# Development
 npm run dev          # Start development server with hot reload
 npm run build        # Build for production
 npm run start        # Start production server
-
-# Database
-npm run migrate      # Run database migrations
-
-# Code Quality
 npm run lint         # Run ESLint
-npm run lint:fix     # Fix ESLint issues
-npm run type-check   # Run TypeScript type checking
-
-# Testing
-npm test             # Run tests
-npm run test:watch   # Run tests in watch mode
-npm run test:coverage # Run tests with coverage
 ```
 
-### Project Structure
-
-```
-src/
-├── config/          # Configuration files
-│   └── env.ts       # Environment variables
-├── db/              # Database connection
-│   └── pool.ts      # PostgreSQL connection pool
-├── middleware/      # Express middleware
-│   ├── authJWT.ts   # JWT authentication
-│   ├── errorHandler.ts # Error handling
-│   └── requireAdmin.ts # Admin role requirement
-├── routes/          # API route handlers
-│   ├── auth.ts      # Authentication routes
-│   ├── chat.ts      # Chat/AI routes
-│   ├── portfolio.ts # Portfolio management
-│   ├── admin.ts     # Admin panel routes
-│   └── faq.ts       # FAQ routes
-├── services/        # Business logic
-│   ├── authService.ts     # Authentication service
-│   ├── marketDataService.ts # Market data integration
-│   ├── llm.ts            # LLM service
-│   ├── portfolioService.ts # Portfolio management
-│   └── adminService.ts    # Admin functionality
-└── index.ts         # Application entry point
-
-scripts/sql/         # Database migration files
-├── 01_core.sql      # Core tables (users, etc.)
-├── 02_faq.sql       # FAQ system
-├── 03_chat.sql      # Chat/inquiry system
-├── 04_portfolio.sql # Portfolio management
-└── 05_admin.sql     # Admin functionality
-```
-
-## Docker Deployment
-
-### Build and Run
-
+### Frontend Scripts
 ```bash
-# Build Docker image
-docker build -t trae-api .
-
-# Run container
-docker run -p 3000:3000 --env-file .env trae-api
+npm run dev          # Start development server
+npm run build        # Build for production
+npm run preview      # Preview production build
+npm run lint         # Run ESLint
 ```
 
-### Docker Compose (with PostgreSQL)
+## 🔧 Development Workflow
 
-```yaml
-version: '3.8'
-services:
-  api:
-    build: .
-    ports:
-      - "3000:3000"
-    environment:
-      - DB_HOST=postgres
-      - DB_NAME=trae_db
-      - DB_USER=postgres
-      - DB_PASSWORD=password
-    depends_on:
-      - postgres
-    
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      - POSTGRES_DB=trae_db
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./scripts/sql:/docker-entrypoint-initdb.d
-    ports:
-      - "5432:5432"
+1. **Start both servers**: Run backend and frontend development servers
+2. **Make changes**: Edit code in either `backend/` or `frontend/` directories
+3. **Hot reload**: Both servers support hot reloading for fast development
+4. **Test features**: Use the default admin account to test functionality
 
-volumes:
-  postgres_data:
-```
+## 📊 Key Features Guide
 
-## Production Deployment
+### Authentication
+- Navigate to `/login` or `/signup`
+- Use JWT tokens for secure API access
+- Protected routes require authentication
 
-1. **Set production environment variables**
-2. **Build the application**
+### AI Chat
+- Access via `/chat` route
+- Interactive financial assistant
+- Conversation history stored locally
+
+### Portfolio Management
+- View at `/portfolio`
+- Add/edit investment holdings
+- Real-time market data integration
+
+### Admin Dashboard
+- Available at `/admin` (admin users only)
+- User management
+- System health monitoring
+
+### Settings
+- User preferences at `/settings`
+- Keyboard shortcuts configuration
+- Theme and display options
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+1. **Port already in use**:
    ```bash
-   npm run build
-   ```
-3. **Run database migrations**
-   ```bash
-   npm run migrate
-   ```
-4. **Start the production server**
-   ```bash
-   npm start
+   # Kill process on port 5000 (backend)
+   npx kill-port 5000
+   
+   # Kill process on port 5173 (frontend)
+   npx kill-port 5173
    ```
 
-## Security Considerations
+2. **Database connection issues**:
+   - Ensure SQLite file permissions are correct
+   - Check `DATABASE_URL` in backend `.env`
 
-- Use strong JWT secrets (minimum 32 characters)
-- Enable SSL/TLS in production
-- Configure CORS appropriately
-- Use environment variables for all secrets
-- Enable rate limiting
-- Regular security updates
+3. **API key errors**:
+   - Yahoo Finance and Google API keys are optional for development
+   - Some features may be limited without valid API keys
 
-## Contributing
+4. **Build errors**:
+   ```bash
+   # Clear node_modules and reinstall
+   rm -rf node_modules package-lock.json
+   npm install
+   ```
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+## 🔒 Security Considerations
 
-## License
+- Change default admin credentials in production
+- Use strong JWT secrets
+- Enable HTTPS in production
+- Regularly update dependencies
+- Review and configure CORS settings
 
-MIT License - see LICENSE file for details
+## 🤝 Contributing
+
+1. Create a feature branch from `main`
+2. Make your changes
+3. Test thoroughly
+4. Submit a pull request
+
+## 📝 License
+
+This project is licensed under the MIT License.
+
+## 📞 Support
+
+For questions or issues, please contact the development team or create an issue in the repository.
+
+---
+
+**Happy coding! 🚀**

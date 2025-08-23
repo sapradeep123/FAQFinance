@@ -1,1 +1,0 @@
-{"version":3,"file":"RequireAdmin.d.ts","sourceRoot":"","sources":["../../../src/components/guards/RequireAdmin.tsx"],"names":[],"mappings":"AAAA,OAAO,EAAE,SAAS,EAAa,MAAM,OAAO,CAAA;AAK5C,UAAU,iBAAiB;IACzB,QAAQ,EAAE,SAAS,CAAA;CACpB;AAED,wBAAgB,YAAY,CAAC,EAAE,QAAQ,EAAE,EAAE,iBAAiB,OA8B3D"}
