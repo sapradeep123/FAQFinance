@@ -2,7 +2,7 @@
 // This file handles environment variables available in the browser
 
 // API Configuration
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
 // Other client-side environment variables
 export const APP_ENV = import.meta.env.MODE || 'development';

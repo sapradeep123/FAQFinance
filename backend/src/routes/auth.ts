@@ -89,12 +89,17 @@ router.post('/register',
     try {
       const { email, password, firstName, lastName } = req.body;
       
-      const result = await authService.register({
+      // Combine firstName and lastName into username for the service
+      const username = `${firstName} ${lastName}`.trim() || email.split('@')[0];
+      
+      const user = await authService.register({
         email,
         password,
-        firstName,
-        lastName
+        username
       });
+
+      // Generate tokens for the new user
+      const tokens = authService.generateTokens(user);
 
       // Log successful registration
       await adminService.logUsage(
@@ -102,7 +107,7 @@ router.post('/register',
         'POST',
         201,
         Date.now() - startTime,
-        result.user.id,
+        user.id,
         req.ip,
         req.get('User-Agent')
       );
@@ -112,15 +117,15 @@ router.post('/register',
         message: 'User registered successfully',
         data: {
           user: {
-            id: result.user.id,
-            email: result.user.email,
-            firstName: result.user.firstName,
-            lastName: result.user.lastName,
-            role: result.user.role,
-            status: result.user.status
+            id: user.id,
+            email: user.email,
+            firstName: user.username, // Using username as firstName for now
+            lastName: '', // No lastName in current schema
+            role: user.role,
+            status: user.status
           },
-          token: result.token,
-          refreshToken: result.refreshToken
+          token: tokens.accessToken,
+          refreshToken: tokens.refreshToken
         }
       });
     } catch (error: any) {
@@ -150,7 +155,7 @@ router.post('/login',
     try {
       const { email, password } = req.body;
       
-      const result = await authService.login(email, password);
+      const result = await authService.login({ email, password });
 
       // Log successful login
       await adminService.logUsage(
@@ -170,14 +175,14 @@ router.post('/login',
           user: {
             id: result.user.id,
             email: result.user.email,
-            firstName: result.user.firstName,
-            lastName: result.user.lastName,
+            firstName: result.user.username, // Using username as firstName for now
+            lastName: '', // No lastName in current schema
             role: result.user.role,
             status: result.user.status,
-            lastLogin: result.user.lastLogin
+            lastLogin: result.user.last_login
           },
-          token: result.token,
-          refreshToken: result.refreshToken
+          token: result.tokens.accessToken,
+          refreshToken: result.tokens.refreshToken
         }
       });
     } catch (error: any) {

@@ -4,6 +4,8 @@ import { portfolioService } from '../services/portfolioService';
 import { authenticateToken } from '../middleware/authJWT';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { adminService } from '../services/adminService';
+import multer from 'multer';
+import * as XLSX from 'xlsx';
 
 const router = Router();
 
@@ -816,5 +818,184 @@ router.get('/:portfolioId/history',
     }
   })
 );
+
+// Configure multer for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    ];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only CSV and Excel files are allowed.'));
+    }
+  }
+});
+
+// POST /api/portfolio/:portfolioId/upload - Upload portfolio file
+router.post('/:portfolioId/upload',
+  upload.single('file'),
+  param('portfolioId')
+    .isUUID()
+    .withMessage('Portfolio ID must be a valid UUID'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const startTime = Date.now();
+    
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors: errors.array()
+        });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'No file uploaded'
+        });
+      }
+
+      const { portfolioId } = req.params;
+      const userId = req.user!.userId;
+      const file = req.file;
+
+      // Parse the uploaded file
+      let positions: any[] = [];
+      
+      if (file.mimetype === 'text/csv') {
+        // Parse CSV
+        const csvData = file.buffer.toString('utf-8');
+        positions = parseCSVData(csvData);
+      } else if (
+        file.mimetype === 'application/vnd.ms-excel' ||
+        file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      ) {
+        // Parse Excel
+        const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet);
+        positions = parseExcelData(jsonData);
+      }
+
+      // Process and save positions
+      const result = await portfolioService.processUploadedPositions(
+        portfolioId,
+        userId,
+        positions,
+        {
+          filename: file.originalname,
+          fileSize: file.size,
+          mimeType: file.mimetype
+        }
+      );
+
+      // Log successful upload
+      await adminService.logUsage(
+        '/api/portfolio/:portfolioId/upload',
+        'POST',
+        200,
+        Date.now() - startTime,
+        userId,
+        req.ip,
+        req.get('User-Agent')
+      );
+
+      res.json({
+        success: true,
+        message: 'Portfolio uploaded successfully',
+        data: result
+      });
+    } catch (error: any) {
+      // Log failed upload
+      await adminService.logUsage(
+        '/api/portfolio/:portfolioId/upload',
+        'POST',
+        error.statusCode || 500,
+        Date.now() - startTime,
+        req.user?.userId,
+        req.ip,
+        req.get('User-Agent'),
+        error.message
+      );
+      throw error;
+    }
+  })
+);
+
+// Helper function to parse CSV data
+function parseCSVData(csvData: string): any[] {
+  const lines = csvData.split('\n').filter(line => line.trim());
+  if (lines.length < 2) {
+    throw createError(400, 'CSV file must have at least a header row and one data row');
+  }
+
+  const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+  const positions: any[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
+    if (values.length < headers.length) continue;
+
+    const row: any = {};
+    headers.forEach((header, index) => {
+      row[header] = values[index];
+    });
+
+    // Map common header variations to standard fields
+    const position = {
+      ticker: row.ticker || row.symbol || row.stock || '',
+      companyName: row.name || row.company || row.description || '',
+      quantity: parseFloat(row.quantity || row.shares || row.units || '0'),
+      avgCostCents: Math.round((parseFloat(row.averageprice || row.price || row.cost || row['average price'] || '0')) * 100),
+      sector: row.sector || row.industry || null,
+      exchange: row.exchange || null
+    };
+
+    if (position.ticker && position.quantity > 0 && position.avgCostCents > 0) {
+      positions.push(position);
+    }
+  }
+
+  return positions;
+}
+
+// Helper function to parse Excel data
+function parseExcelData(jsonData: any[]): any[] {
+  const positions: any[] = [];
+
+  for (const row of jsonData) {
+    // Convert all keys to lowercase for consistent mapping
+    const lowerRow: any = {};
+    Object.keys(row).forEach(key => {
+      lowerRow[key.toLowerCase().replace(/\s+/g, '')] = row[key];
+    });
+
+    const position = {
+      ticker: lowerRow.ticker || lowerRow.symbol || lowerRow.stock || '',
+      companyName: lowerRow.name || lowerRow.company || lowerRow.description || '',
+      quantity: parseFloat(lowerRow.quantity || lowerRow.shares || lowerRow.units || '0'),
+      avgCostCents: Math.round((parseFloat(lowerRow.averageprice || lowerRow.price || lowerRow.cost || lowerRow.averagecost || '0')) * 100),
+      sector: lowerRow.sector || lowerRow.industry || null,
+      exchange: lowerRow.exchange || null
+    };
+
+    if (position.ticker && position.quantity > 0 && position.avgCostCents > 0) {
+      positions.push(position);
+    }
+  }
+
+  return positions;
+}
 
 export default router;

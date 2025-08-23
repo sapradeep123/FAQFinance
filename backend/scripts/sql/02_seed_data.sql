@@ -2,15 +2,15 @@
 -- This script inserts sample data for development purposes
 
 -- Insert sample admin user (password: admin123)
-INSERT INTO users (id, email, password, first_name, last_name, role, is_active, email_verified, created_at, updated_at) VALUES
-('550e8400-e29b-41d4-a716-446655440000', 'admin@example.com', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/VcSAg/9qm', 'Admin', 'User', 'admin', true, true, NOW(), NOW())
+INSERT INTO users (id, email, password_hash, first_name, last_name, role, status, email_verified, created_at, updated_at) VALUES
+('550e8400-e29b-41d4-a716-446655440000', 'admin@example.com', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/VcSAg/9qm', 'Admin', 'User', 'ADMIN', 'ACTIVE', true, NOW(), NOW())
 ON CONFLICT (email) DO NOTHING;
 
 -- Insert sample regular users
-INSERT INTO users (id, email, password, first_name, last_name, role, is_active, email_verified, created_at, updated_at) VALUES
-('550e8400-e29b-41d4-a716-446655440001', 'john.doe@example.com', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/VcSAg/9qm', 'John', 'Doe', 'user', true, true, NOW() - INTERVAL '30 days', NOW()),
-('550e8400-e29b-41d4-a716-446655440002', 'jane.smith@example.com', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/VcSAg/9qm', 'Jane', 'Smith', 'user', true, true, NOW() - INTERVAL '15 days', NOW()),
-('550e8400-e29b-41d4-a716-446655440003', 'mike.johnson@example.com', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/VcSAg/9qm', 'Mike', 'Johnson', 'user', true, false, NOW() - INTERVAL '7 days', NOW())
+INSERT INTO users (id, email, password_hash, first_name, last_name, role, status, email_verified, created_at, updated_at) VALUES
+('550e8400-e29b-41d4-a716-446655440001', 'john.doe@example.com', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/VcSAg/9qm', 'John', 'Doe', 'USER', 'ACTIVE', true, NOW() - INTERVAL '30 days', NOW()),
+('550e8400-e29b-41d4-a716-446655440002', 'jane.smith@example.com', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/VcSAg/9qm', 'Jane', 'Smith', 'USER', 'ACTIVE', true, NOW() - INTERVAL '15 days', NOW()),
+('550e8400-e29b-41d4-a716-446655440003', 'mike.johnson@example.com', '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/VcSAg/9qm', 'Mike', 'Johnson', 'USER', 'ACTIVE', false, NOW() - INTERVAL '7 days', NOW())
 ON CONFLICT (email) DO NOTHING;
 
 -- Insert sample portfolios

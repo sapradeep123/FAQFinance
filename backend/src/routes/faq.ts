@@ -4,7 +4,7 @@ import { authenticateToken, optionalAuth } from '../middleware/authJWT';
 import { requireAdmin } from '../middleware/requireAdmin';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { adminService } from '../services/adminService';
-import { pool } from '../config/database';
+import { query as dbQuery } from '../config/database';
 
 const router = Router();
 
@@ -151,7 +151,7 @@ router.get('/',
       query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
       params.push(limit, offset);
       
-      const result = await pool.query(query, params);
+      const result = await dbQuery(query, params);
       const faqs = result.rows;
 
       // Log successful FAQs fetch
@@ -236,7 +236,7 @@ router.get('/search',
       query += ` LIMIT $${paramIndex}`;
       params.push(limit);
       
-      const result = await pool.query(query, params);
+      const result = await dbQuery(query, params);
       const faqs = result.rows.map(row => {
         const { rank, ...faq } = row;
         return faq;
@@ -300,7 +300,7 @@ router.get('/categories',
         ORDER BY category
       `;
       
-      const result = await pool.query(query);
+      const result = await dbQuery(query);
       const categories = result.rows;
 
       // Log successful categories fetch
@@ -356,7 +356,7 @@ router.get('/:faqId',
         WHERE id = $1
       `;
       
-      const result = await pool.query(query, [faqId]);
+      const result = await dbQuery(query, [faqId]);
       
       if (result.rows.length === 0) {
         throw createError(404, 'FAQ not found');
@@ -425,11 +425,11 @@ router.post('/',
         RETURNING id, category, question, answer, keywords, sort_order, status, created_at, updated_at
       `;
       
-      const result = await pool.query(query, [
-        category,
+      const result = await dbQuery(query, [
         question,
         answer,
-        keywords || null,
+        category,
+        keywords || '',
         sortOrder || 0,
         status || 'ACTIVE'
       ]);
@@ -509,7 +509,7 @@ router.put('/:faqId',
         RETURNING id, category, question, answer, keywords, sort_order, status, created_at, updated_at
       `;
       
-      const result = await pool.query(query, params);
+      const result = await dbQuery(query, params);
       
       if (result.rows.length === 0) {
         throw createError(404, 'FAQ not found');
@@ -561,7 +561,7 @@ router.delete('/:faqId',
       const { faqId } = req.params;
       
       const query = 'DELETE FROM faqs WHERE id = $1 RETURNING id';
-      const result = await pool.query(query, [faqId]);
+      const result = await dbQuery(query, [faqId]);
       
       if (result.rows.length === 0) {
         throw createError(404, 'FAQ not found');

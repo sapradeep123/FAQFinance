@@ -1,6 +1,7 @@
 import { db, Portfolio, Position } from '../lib/dexie'
 import { v4 as uuidv4 } from 'uuid'
 import { API_BASE_URL } from '../config/clientEnv'
+import * as XLSX from 'xlsx'
 
 export interface CreatePortfolioData {
   name: string
@@ -255,26 +256,41 @@ class PortfolioService {
   }
 
   private async parseXLSX(file: File): Promise<PositionData[]> {
-    // For XLSX parsing, we'll use a simple approach that converts to CSV-like format
-    // In a real implementation, you'd use a library like xlsx or exceljs
     return new Promise((resolve, reject) => {
       const reader = new FileReader()
       reader.onload = async (e) => {
         try {
-          // This is a simplified XLSX parser - in production, use proper XLSX library
           const arrayBuffer = e.target?.result as ArrayBuffer
+          const workbook = XLSX.read(arrayBuffer, { type: 'array' })
+          const sheetName = workbook.SheetNames[0]
+          const worksheet = workbook.Sheets[sheetName]
+          const jsonData = XLSX.utils.sheet_to_json(worksheet)
           
-          // For now, we'll throw an error suggesting CSV format
-          // In a real implementation, you'd use: import * as XLSX from 'xlsx'
-          reject(new Error('XLSX parsing not implemented. Please convert to CSV format or use a proper XLSX library.'))
+          const positions: PositionData[] = []
           
-          // Example implementation with xlsx library:
-          // const workbook = XLSX.read(arrayBuffer, { type: 'array' })
-          // const sheetName = workbook.SheetNames[0]
-          // const worksheet = workbook.Sheets[sheetName]
-          // const jsonData = XLSX.utils.sheet_to_json(worksheet)
-          // const positions = jsonData.map(row => ({ ... }))
-          // resolve(positions)
+          for (const row of jsonData) {
+            // Convert all keys to lowercase for consistent mapping
+            const lowerRow: any = {}
+            Object.keys(row).forEach(key => {
+              lowerRow[key.toLowerCase().replace(/\s+/g, '')] = (row as any)[key]
+            })
+            
+            const position: PositionData = {
+              ticker: lowerRow.ticker || lowerRow.symbol || lowerRow.stock || '',
+              name: lowerRow.name || lowerRow.company || lowerRow.description || '',
+              quantity: parseFloat(lowerRow.quantity || lowerRow.shares || lowerRow.units || '0'),
+              averagePrice: parseFloat(lowerRow.averageprice || lowerRow.price || lowerRow.cost || lowerRow.averagecost || '0'),
+              currency: lowerRow.currency || lowerRow.curr || undefined,
+              sector: lowerRow.sector || lowerRow.industry || undefined,
+              exchange: lowerRow.exchange || lowerRow.market || undefined
+            }
+            
+            if (position.ticker && position.quantity > 0 && position.averagePrice > 0) {
+              positions.push(position)
+            }
+          }
+          
+          resolve(positions)
         } catch (error) {
           reject(new Error(`Failed to parse XLSX: ${error instanceof Error ? error.message : 'Unknown error'}`))
         }
@@ -310,6 +326,37 @@ class PortfolioService {
 
   async getTotalPortfolios(): Promise<number> {
     return await db.portfolios.count()
+  }
+
+  async uploadPortfolioFile(portfolioId: string, file: File): Promise<{
+    uploaded_positions: number;
+    skipped_positions: number;
+    errors: string[];
+    upload_id: string;
+  }> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const token = localStorage.getItem('authToken')
+    if (!token) {
+      throw new Error('Authentication required')
+    }
+
+    const response = await fetch(`${API_BASE_URL}/api/portfolio/${portfolioId}/upload`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ message: 'Upload failed' }))
+      throw new Error(errorData.message || 'Failed to upload portfolio file')
+    }
+
+    const result = await response.json()
+    return result.data
   }
 }
 

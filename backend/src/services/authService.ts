@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import { pool } from '../db/pool';
+import { query } from '../config/database';
 import { config } from '../config/env';
 import { createError } from '../middleware/errorHandler';
 
@@ -85,35 +85,31 @@ class AuthService {
     try {
       const decoded = jwt.verify(token, config.jwt.refreshSecret) as any;
       if (decoded.type !== 'refresh') {
-        throw createError(401, 'Invalid token type');
+        throw createError('Invalid token type', 401);
       }
       return { userId: decoded.userId };
     } catch (error) {
-      throw createError(401, 'Invalid refresh token');
+      throw createError('Invalid refresh token', 401);
     }
   }
 
   async register(userData: CreateUserData): Promise<User> {
-    const client = await pool.connect();
-    
     try {
-      await client.query('BEGIN');
-
       // Check if user already exists
-      const existingUser = await client.query(
+      const existingUser = await query(
         'SELECT id FROM users WHERE email = $1 OR username = $2',
         [userData.email, userData.username]
       );
 
       if (existingUser.rows.length > 0) {
-        throw createError(409, 'User with this email or username already exists');
+        throw createError('User with this email or username already exists', 409);
       }
 
       // Hash password
       const hashedPassword = await this.hashPassword(userData.password);
 
       // Insert new user
-      const result = await client.query(
+      const result = await query(
         `INSERT INTO users (email, username, password_hash, region, currency, role, status)
          VALUES ($1, $2, $3, $4, $5, 'USER', 'ACTIVE')
          RETURNING id, email, username, role, status, region, currency, theme, created_at, updated_at`,
@@ -126,22 +122,16 @@ class AuthService {
         ]
       );
 
-      await client.query('COMMIT');
       return result.rows[0];
     } catch (error) {
-      await client.query('ROLLBACK');
       throw error;
-    } finally {
-      client.release();
     }
   }
 
   async login(credentials: LoginCredentials): Promise<{ user: User; tokens: { accessToken: string; refreshToken: string } }> {
-    const client = await pool.connect();
-    
     try {
       // Find user by email
-      const result = await client.query(
+      const result = await query(
         `SELECT id, email, username, password_hash, role, status, region, currency, theme, 
                 created_at, updated_at, last_login
          FROM users 
@@ -150,24 +140,24 @@ class AuthService {
       );
 
       if (result.rows.length === 0) {
-        throw createError(401, 'Invalid email or password');
+        throw createError('Invalid email or password', 401);
       }
 
       const user = result.rows[0];
 
       // Check if user is active
       if (user.status !== 'ACTIVE') {
-        throw createError(403, 'Account is inactive or suspended');
+        throw createError('Account is inactive or suspended', 403);
       }
 
       // Verify password
       const isPasswordValid = await this.comparePassword(credentials.password, user.password_hash);
       if (!isPasswordValid) {
-        throw createError(401, 'Invalid email or password');
+        throw createError('Invalid email or password', 401);
       }
 
       // Update last login
-      await client.query(
+      await query(
         'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = $1',
         [user.id]
       );
@@ -180,13 +170,13 @@ class AuthService {
         user: userWithoutPassword,
         tokens
       };
-    } finally {
-      client.release();
+    } catch (error) {
+      throw error;
     }
   }
 
   async getUserById(userId: string): Promise<User | null> {
-    const result = await pool.query(
+    const result = await query(
       `SELECT id, email, username, role, status, region, currency, theme, 
               created_at, updated_at, last_login
        FROM users 
@@ -198,7 +188,7 @@ class AuthService {
   }
 
   async getUserByEmail(email: string): Promise<User | null> {
-    const result = await pool.query(
+    const result = await query(
       `SELECT id, email, username, role, status, region, currency, theme, 
               created_at, updated_at, last_login
        FROM users 
@@ -210,20 +200,16 @@ class AuthService {
   }
 
   async updateProfile(userId: string, profileData: UpdateProfileData): Promise<User> {
-    const client = await pool.connect();
-    
     try {
-      await client.query('BEGIN');
-
       // Check if username is being changed and if it's already taken
       if (profileData.username) {
-        const existingUser = await client.query(
+        const existingUser = await query(
           'SELECT id FROM users WHERE username = $1 AND id != $2',
           [profileData.username, userId]
         );
 
         if (existingUser.rows.length > 0) {
-          throw createError(409, 'Username is already taken');
+          throw createError('Username is already taken', 409);
         }
       }
 
@@ -250,13 +236,13 @@ class AuthService {
       }
 
       if (updateFields.length === 0) {
-        throw createError(400, 'No fields to update');
+        throw createError('No fields to update', 400);
       }
 
       updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
       updateValues.push(userId);
 
-      const result = await client.query(
+      const result = await query(
         `UPDATE users 
          SET ${updateFields.join(', ')}
          WHERE id = $${paramIndex}
@@ -265,27 +251,19 @@ class AuthService {
       );
 
       if (result.rows.length === 0) {
-        throw createError(404, 'User not found');
+        throw createError('User not found', 404);
       }
 
-      await client.query('COMMIT');
       return result.rows[0];
     } catch (error) {
-      await client.query('ROLLBACK');
       throw error;
-    } finally {
-      client.release();
     }
   }
 
   async changePassword(userId: string, passwordData: ChangePasswordData): Promise<void> {
-    const client = await pool.connect();
-    
     try {
-      await client.query('BEGIN');
-
       // Get current password hash
-      const result = await client.query(
+      const result = await query(
         'SELECT password_hash FROM users WHERE id = $1',
         [userId]
       );
@@ -301,24 +279,19 @@ class AuthService {
       );
 
       if (!isCurrentPasswordValid) {
-        throw createError(401, 'Current password is incorrect');
+        throw createError('Current password is incorrect', 401);
       }
 
       // Hash new password
       const newHashedPassword = await this.hashPassword(passwordData.newPassword);
 
       // Update password
-      await client.query(
+      await query(
         'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
         [newHashedPassword, userId]
       );
-
-      await client.query('COMMIT');
     } catch (error) {
-      await client.query('ROLLBACK');
       throw error;
-    } finally {
-      client.release();
     }
   }
 
@@ -331,7 +304,7 @@ class AuthService {
     }
 
     if (user.status !== 'ACTIVE') {
-      throw createError(403, 'Account is inactive or suspended');
+      throw createError('Account is inactive or suspended', 403);
     }
 
     return this.generateTokens(user);
@@ -344,7 +317,7 @@ class AuthService {
       { expiresIn: '24h' }
     );
 
-    await pool.query(
+    await query(
       `INSERT INTO user_sessions (id, user_id, ip_address, user_agent, expires_at)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (id) DO UPDATE SET
@@ -364,7 +337,7 @@ class AuthService {
   }
 
   async validateSession(sessionId: string): Promise<boolean> {
-    const result = await pool.query(
+    const result = await query(
       `SELECT id FROM user_sessions 
        WHERE id = $1 AND expires_at > CURRENT_TIMESTAMP AND is_active = true`,
       [sessionId]
@@ -372,7 +345,7 @@ class AuthService {
 
     if (result.rows.length > 0) {
       // Update last activity
-      await pool.query(
+      await query(
         'UPDATE user_sessions SET last_activity = CURRENT_TIMESTAMP WHERE id = $1',
         [sessionId]
       );
@@ -383,14 +356,14 @@ class AuthService {
   }
 
   async invalidateSession(sessionId: string): Promise<void> {
-    await pool.query(
+    await query(
       'UPDATE user_sessions SET is_active = false WHERE id = $1',
       [sessionId]
     );
   }
 
   async invalidateAllUserSessions(userId: string): Promise<void> {
-    await pool.query(
+    await query(
       'UPDATE user_sessions SET is_active = false WHERE user_id = $1',
       [userId]
     );

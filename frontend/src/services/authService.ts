@@ -96,76 +96,70 @@ class AuthService {
   }
 
   async login(credentials: LoginCredentials): Promise<AuthResponse> {
-    // TODO: Replace with actual API call to POST /auth/login
-    // const response = await fetch(`${API_BASE_URL}/auth/login`, {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify(credentials)
-    // });
-    // if (!response.ok) throw new Error('Login failed');
-    // return await response.json();
-    
-    return new Promise((resolve, reject) => {
-      setTimeout(() => {
-        const users = this.getUsers()
-        const user = users.find(u => u.email === credentials.email)
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(credentials)
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || 'Login failed');
+      }
+      
+      if (data.success && data.data) {
+        const user: User = {
+          id: data.data.user.id,
+          email: data.data.user.email,
+          name: `${data.data.user.firstName} ${data.data.user.lastName}`,
+          role: data.data.user.role === 'ADMIN' ? 'admin' : 'user',
+          createdAt: data.data.user.createdAt || new Date().toISOString()
+        };
         
-        if (!user) {
-          reject(new Error('User not found'))
-          return
-        }
-
-        const expectedPassword = USER_PASSWORDS[credentials.email]
-        if (credentials.password !== expectedPassword) {
-          reject(new Error('Invalid password'))
-          return
-        }
-
-        const token = this.generateToken(user)
-        this.saveAuth(user, token)
+        const token = data.data.token;
+        this.saveAuth(user, token);
         
-        resolve({ user, token })
-      }, 800)
-    })
+        return { user, token };
+      }
+      
+      throw new Error('Invalid response format');
+    } catch (error: any) {
+      throw new Error(error.message || 'Login failed');
+    }
   }
 
   async signup(data: SignupData): Promise<void> {
-    // TODO: Replace with actual API call to POST /auth/signup
-    // const response = await fetch(`${API_BASE_URL}/auth/signup`, {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify(data)
-    // });
-    // if (!response.ok) throw new Error('Signup failed');
-    
-    return new Promise((resolve, reject) => {
-      setTimeout(() => {
-        const users = this.getUsers()
-        
-        if (users.find(u => u.email === data.email)) {
-          reject(new Error('Email already exists'))
-          return
-        }
-
-        const newUser: User = {
-          id: Date.now().toString(),
-          email: data.email,
-          name: data.name,
-          role: 'user',
-          createdAt: new Date().toISOString()
-        }
-
-        users.push(newUser)
-        this.saveUsers(users)
-        
-        // Store password for new user
-        const passwords = JSON.parse(localStorage.getItem('trae_passwords') || '{}')
-        passwords[data.email] = data.password
-        localStorage.setItem('trae_passwords', JSON.stringify(passwords))
-        
-        resolve()
-      }, 1000)
-    })
+    try {
+      const [firstName, ...lastNameParts] = data.name.split(' ');
+      const lastName = lastNameParts.join(' ') || 'User';
+      
+      const signupData = {
+        email: data.email,
+        password: data.password,
+        firstName,
+        lastName
+      };
+      
+      const response = await fetch(`${API_BASE_URL}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(signupData)
+      });
+      
+      const responseData = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(responseData.message || 'Signup failed');
+      }
+      
+      if (!responseData.success) {
+        throw new Error(responseData.message || 'Signup failed');
+      }
+    } catch (error: any) {
+      throw new Error(error.message || 'Signup failed');
+    }
   }
 
   async me(): Promise<User> {

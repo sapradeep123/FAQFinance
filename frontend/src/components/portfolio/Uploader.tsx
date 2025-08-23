@@ -1,9 +1,9 @@
 import React, { useCallback, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
-import * as XLSX from 'xlsx';
 import { Upload, FileText, AlertCircle, CheckCircle } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Alert, AlertDescription } from '../ui/alert';
+import { portfolioService } from '../../services/portfolioService';
 
 interface PreviewPosition {
   id: string;
@@ -14,139 +14,46 @@ interface PreviewPosition {
 }
 
 interface UploaderProps {
-  onFileUpload: (data: PreviewPosition[]) => void;
+  portfolioId: string;
+  onFileUpload: (result: {
+    uploaded_positions: number;
+    skipped_positions: number;
+    errors: string[];
+    upload_id: string;
+  }) => void;
 }
 
-const REQUIRED_HEADERS = ['ticker', 'qty', 'avg_cost', 'as_of_date'];
+const SUPPORTED_HEADERS = [
+  'ticker', 'symbol', 'stock',
+  'name', 'company', 'description', 
+  'quantity', 'shares', 'units',
+  'averageprice', 'price', 'cost', 'average price',
+  'sector', 'industry',
+  'exchange', 'market'
+];
 
-export function Uploader({ onFileUpload }: UploaderProps) {
+export function Uploader({ portfolioId, onFileUpload }: UploaderProps) {
   const [uploadStatus, setUploadStatus] = useState<{
     type: 'success' | 'error' | null;
     message: string;
   }>({ type: null, message: '' });
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const validateHeaders = (headers: string[]): boolean => {
-    const normalizedHeaders = headers.map(h => h.toLowerCase().trim());
-    return REQUIRED_HEADERS.every(required => 
-      normalizedHeaders.includes(required.toLowerCase())
-    );
-  };
-
-  const parseCSV = (text: string): any[] => {
-    const lines = text.split('\n').filter(line => line.trim());
-    if (lines.length < 2) throw new Error('File must contain at least a header and one data row');
-    
-    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-    
-    if (!validateHeaders(headers)) {
-      throw new Error(`Invalid headers. Required: ${REQUIRED_HEADERS.join(', ')}. Found: ${headers.join(', ')}`);
+  const validateFile = (file: File): void => {
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (file.size > maxSize) {
+      throw new Error('File size must be less than 10MB');
     }
     
-    const data = [];
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
-      if (values.length !== headers.length) continue;
-      
-      const row: any = {};
-      headers.forEach((header, index) => {
-        row[header.toLowerCase()] = values[index];
-      });
-      data.push(row);
+    const allowedTypes = [
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    ];
+    
+    if (!allowedTypes.includes(file.type)) {
+      throw new Error('Invalid file type. Only CSV and Excel files are allowed.');
     }
-    
-    return data;
-  };
-
-  const parseXLSX = (buffer: ArrayBuffer): any[] => {
-    const workbook = XLSX.read(buffer, { type: 'array' });
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
-    
-    if (jsonData.length < 2) {
-      throw new Error('File must contain at least a header and one data row');
-    }
-    
-    const headers = jsonData[0].map((h: any) => String(h).toLowerCase().trim());
-    
-    if (!validateHeaders(headers)) {
-      throw new Error(`Invalid headers. Required: ${REQUIRED_HEADERS.join(', ')}. Found: ${headers.join(', ')}`);
-    }
-    
-    const data = [];
-    for (let i = 1; i < jsonData.length; i++) {
-      const row: any = {};
-      headers.forEach((header, index) => {
-        row[header] = jsonData[i][index];
-      });
-      if (Object.values(row).some(v => v !== undefined && v !== null && v !== '')) {
-        data.push(row);
-      }
-    }
-    
-    return data;
-  };
-
-  const validateAndTransformData = (rawData: any[]): PreviewPosition[] => {
-    const errors: string[] = [];
-    const validData: PreviewPosition[] = [];
-    
-    rawData.forEach((row, index) => {
-      const rowNum = index + 2; // +2 because index starts at 0 and we skip header
-      
-      // Validate ticker
-      if (!row.ticker || typeof row.ticker !== 'string' || !row.ticker.trim()) {
-        errors.push(`Row ${rowNum}: Invalid ticker`);
-        return;
-      }
-      
-      // Validate quantity
-      const qty = Number(row.qty);
-      if (isNaN(qty) || qty <= 0) {
-        errors.push(`Row ${rowNum}: Invalid quantity (must be positive number)`);
-        return;
-      }
-      
-      // Validate average cost
-      const avgCost = Number(row.avg_cost);
-      if (isNaN(avgCost) || avgCost <= 0) {
-        errors.push(`Row ${rowNum}: Invalid average cost (must be positive number)`);
-        return;
-      }
-      
-      // Validate date
-      const dateStr = String(row.as_of_date).trim();
-      if (!dateStr) {
-        errors.push(`Row ${rowNum}: Missing as_of_date`);
-        return;
-      }
-      
-      // Try to parse date
-      const date = new Date(dateStr);
-      if (isNaN(date.getTime())) {
-        errors.push(`Row ${rowNum}: Invalid date format (${dateStr})`);
-        return;
-      }
-      
-      validData.push({
-        id: `preview-${index}`,
-        ticker: row.ticker.toString().toUpperCase().trim(),
-        qty: qty,
-        avg_cost: avgCost,
-        as_of_date: dateStr
-      });
-    });
-    
-    if (errors.length > 0) {
-      throw new Error(`Validation errors:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n... and ${errors.length - 5} more errors` : ''}`);
-    }
-    
-    if (validData.length === 0) {
-      throw new Error('No valid data rows found');
-    }
-    
-    return validData;
   };
 
   const processFile = async (file: File) => {
@@ -154,29 +61,28 @@ export function Uploader({ onFileUpload }: UploaderProps) {
     setUploadStatus({ type: null, message: '' });
     
     try {
-      let rawData: any[];
+      validateFile(file);
       
-      if (file.name.toLowerCase().endsWith('.csv')) {
-        const text = await file.text();
-        rawData = parseCSV(text);
-      } else if (file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls')) {
-        const buffer = await file.arrayBuffer();
-        rawData = parseXLSX(buffer);
-      } else {
-        throw new Error('Unsupported file format. Please upload CSV or XLSX files only.');
-      }
+      const result = await portfolioService.uploadPortfolioFile(portfolioId, file);
       
-      const validatedData = validateAndTransformData(rawData);
+      onFileUpload(result);
       
-      onFileUpload(validatedData);
+      const successMessage = `Successfully uploaded ${result.uploaded_positions} positions from ${file.name}`;
+      const warningMessage = result.skipped_positions > 0 
+        ? `\n${result.skipped_positions} positions were skipped.`
+        : '';
+      const errorMessage = result.errors.length > 0
+        ? `\n\nErrors:\n${result.errors.slice(0, 3).join('\n')}${result.errors.length > 3 ? `\n... and ${result.errors.length - 3} more errors` : ''}`
+        : '';
+      
       setUploadStatus({
-        type: 'success',
-        message: `Successfully processed ${validatedData.length} positions from ${file.name}`
+        type: result.errors.length > 0 ? 'error' : 'success',
+        message: successMessage + warningMessage + errorMessage
       });
     } catch (error) {
       setUploadStatus({
         type: 'error',
-        message: error instanceof Error ? error.message : 'Failed to process file'
+        message: error instanceof Error ? error.message : 'Failed to upload file'
       });
     } finally {
       setIsProcessing(false);
@@ -231,23 +137,31 @@ export function Uploader({ onFileUpload }: UploaderProps) {
         </div>
       </div>
 
-      {/* Required Headers Info */}
+      {/* Supported Headers Info */}
       <div className="bg-muted/50 rounded-lg p-4">
         <div className="flex items-start gap-3">
           <FileText className="h-5 w-5 text-muted-foreground mt-0.5" />
           <div>
-            <p className="text-sm font-medium mb-2">Required Headers:</p>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              {REQUIRED_HEADERS.map(header => (
-                <div key={header} className="flex items-center gap-1">
-                  <code className="bg-background px-1.5 py-0.5 rounded text-xs">
-                    {header}
-                  </code>
-                </div>
-              ))}
+            <p className="text-sm font-medium mb-2">Supported Headers (flexible mapping):</p>
+            <div className="grid grid-cols-1 gap-2 text-xs">
+              <div>
+                <strong>Ticker:</strong> ticker, symbol, stock
+              </div>
+              <div>
+                <strong>Company:</strong> name, company, description
+              </div>
+              <div>
+                <strong>Quantity:</strong> quantity, shares, units
+              </div>
+              <div>
+                <strong>Price:</strong> averageprice, price, cost, "average price"
+              </div>
+              <div>
+                <strong>Optional:</strong> sector, industry, exchange, market
+              </div>
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              Headers are case-insensitive. Date format: YYYY-MM-DD or MM/DD/YYYY
+              Headers are case-insensitive and flexible. The system will automatically map common variations.
             </p>
           </div>
         </div>

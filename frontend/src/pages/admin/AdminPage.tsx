@@ -4,6 +4,7 @@ import { AdminKpis } from './components/AdminKpis';
 import { AdminUsersTable } from './components/AdminUsersTable';
 import { AdminApiConfigForm } from './components/AdminApiConfigForm';
 import { AdminLogs } from './components/AdminLogs';
+import { AdminFAQManagement } from './components/AdminFAQManagement';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs';
@@ -132,10 +133,11 @@ export function AdminPage() {
 
         {/* Main Content Tabs */}
         <Tabs defaultValue="users" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="users">User Management</TabsTrigger>
-            <TabsTrigger value="api-config">API Configuration</TabsTrigger>
-            <TabsTrigger value="logs">System Logs</TabsTrigger>
+          <TabsList className="grid w-full grid-cols-2 md:grid-cols-4">
+            <TabsTrigger value="users">Users</TabsTrigger>
+            <TabsTrigger value="api-config">API Config</TabsTrigger>
+            <TabsTrigger value="faq-management">FAQ Mgmt</TabsTrigger>
+            <TabsTrigger value="logs">Logs</TabsTrigger>
           </TabsList>
 
           <TabsContent value="users" className="space-y-6">
@@ -156,6 +158,17 @@ export function AdminPage() {
               </CardHeader>
               <CardContent>
                 <AdminApiConfigForm />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="faq-management" className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>FAQ Management</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <AdminFAQManagement />
               </CardContent>
             </Card>
           </TabsContent>

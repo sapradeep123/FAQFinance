@@ -229,17 +229,35 @@ async function createSQLiteTables(): Promise<void> {
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT UNIQUE NOT NULL,
+      username TEXT UNIQUE,
       password_hash TEXT NOT NULL,
       first_name TEXT,
       last_name TEXT,
-      role TEXT DEFAULT 'user' CHECK (role IN ('user', 'admin')),
+      role TEXT DEFAULT 'USER' CHECK (role IN ('USER', 'ADMIN')),
+      status TEXT DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'INACTIVE', 'SUSPENDED')),
+      region TEXT DEFAULT 'US',
+      currency TEXT DEFAULT 'USD',
+      theme TEXT DEFAULT 'light',
       is_active BOOLEAN DEFAULT true,
       email_verified BOOLEAN DEFAULT false,
+      last_login DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
   
+  // Sessions table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      expires_at DATETIME NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
   // Portfolios table
   database.exec(`
     CREATE TABLE IF NOT EXISTS portfolios (
@@ -268,18 +286,52 @@ async function createSQLiteTables(): Promise<void> {
     )
   `);
   
-  // FAQ table
+  // FAQs table (matching API expectations)
   database.exec(`
-    CREATE TABLE IF NOT EXISTS faq (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+    CREATE TABLE IF NOT EXISTS faqs (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      category TEXT NOT NULL DEFAULT 'GENERAL' CHECK (category IN ('BANKING', 'LOANS', 'INVESTMENTS', 'TAX', 'CARDS', 'GENERAL')),
       question TEXT NOT NULL,
       answer TEXT NOT NULL,
-      category TEXT,
-      is_active BOOLEAN DEFAULT true,
+      keywords TEXT,
+      status TEXT DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'INACTIVE', 'DRAFT')),
+      sort_order INTEGER DEFAULT 0,
+      view_count INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_by INTEGER REFERENCES users(id),
+      updated_by INTEGER REFERENCES users(id)
     )
   `);
+  
+  // Insert sample FAQs if table is empty
+  const faqCount = database.prepare('SELECT COUNT(*) as count FROM faqs').get();
+  if (faqCount.count === 0) {
+    const insertFAQ = database.prepare(`
+      INSERT INTO faqs (category, question, answer, keywords, sort_order, status)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    
+    // Banking FAQs
+    insertFAQ.run('BANKING', 'How do I open a savings account?', 'To open a savings account, visit any of our branches with a valid ID, proof of address, and minimum deposit. You can also apply online through our website.', 'savings,account,open,banking', 1, 'ACTIVE');
+    insertFAQ.run('BANKING', 'What are the current interest rates?', 'Our current savings account interest rates range from 0.5% to 2.5% APY depending on your account balance and type. Check our website for the most up-to-date rates.', 'interest,rates,savings,APY', 2, 'ACTIVE');
+    insertFAQ.run('BANKING', 'How can I transfer money between accounts?', 'You can transfer money through online banking, mobile app, ATM, or by visiting a branch. Online transfers are usually instant for accounts within our bank.', 'transfer,money,online,banking', 3, 'ACTIVE');
+    
+    // Investment FAQs
+    insertFAQ.run('INVESTMENTS', 'What is dollar-cost averaging?', 'Dollar-cost averaging is an investment strategy where you invest a fixed amount regularly, regardless of market conditions. This helps reduce the impact of market volatility.', 'dollar-cost,averaging,investment,strategy', 1, 'ACTIVE');
+    insertFAQ.run('INVESTMENTS', 'How do I start investing?', 'Start by setting clear financial goals, building an emergency fund, then consider low-cost index funds or ETFs. Our investment advisors can help create a personalized strategy.', 'investing,start,beginner,portfolio', 2, 'ACTIVE');
+    insertFAQ.run('INVESTMENTS', 'What is portfolio diversification?', 'Portfolio diversification means spreading investments across different asset classes, sectors, and geographic regions to reduce risk and improve potential returns.', 'diversification,portfolio,risk,assets', 3, 'ACTIVE');
+    
+    // Loan FAQs
+    insertFAQ.run('LOANS', 'What documents do I need for a loan?', 'Typically you need proof of income, employment verification, credit history, bank statements, and identification. Specific requirements vary by loan type.', 'loan,documents,requirements,application', 1, 'ACTIVE');
+    insertFAQ.run('LOANS', 'How is my credit score calculated?', 'Credit scores are calculated based on payment history (35%), credit utilization (30%), length of credit history (15%), credit mix (10%), and new credit inquiries (10%).', 'credit,score,calculation,factors', 2, 'ACTIVE');
+    
+    // General FAQs
+    insertFAQ.run('GENERAL', 'How do I contact customer support?', 'You can reach our customer support 24/7 through phone, email, live chat on our website, or visit any branch during business hours.', 'support,contact,help,customer', 1, 'ACTIVE');
+    insertFAQ.run('GENERAL', 'Is my data secure?', 'Yes, we use bank-level encryption, multi-factor authentication, and follow strict regulatory compliance to protect your personal and financial information.', 'security,data,protection,privacy', 2, 'ACTIVE');
+    
+    console.log('📋 Sample FAQs inserted');
+  }
   
   // Admin tables
   database.exec(`
@@ -375,11 +427,25 @@ async function createSQLiteTables(): Promise<void> {
     const hashedPassword = await bcrypt.hash('admin123', 12);
     
     database.prepare(`
-      INSERT INTO users (email, password_hash, first_name, last_name, role, is_active, email_verified)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run('admin@example.com', hashedPassword, 'Admin', 'User', 'admin', 1, 1);
+      INSERT INTO users (email, username, password_hash, first_name, last_name, role, is_active, email_verified)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run('admin@example.com', 'admin', hashedPassword, 'Admin', 'User', 'ADMIN', 1, 1);
     
     console.log('👤 Default admin user created');
+  }
+  
+  // Insert default demo user if not exists
+  const demoExists = database.prepare('SELECT id FROM users WHERE email = ?').get('demo@example.com');
+  if (!demoExists) {
+    const bcrypt = require('bcrypt');
+    const hashedPassword = await bcrypt.hash('demo123', 12);
+    
+    database.prepare(`
+      INSERT INTO users (email, username, password_hash, first_name, last_name, role, is_active, email_verified)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run('demo@example.com', 'demo', hashedPassword, 'Demo', 'User', 'USER', 1, 1);
+    
+    console.log('👤 Default demo user created');
   }
   
   console.log('📋 SQLite tables created successfully');

@@ -83,8 +83,26 @@ export default function PortfolioPage() {
     }
   };
 
-  const handleFileUpload = (data: PreviewPosition[]) => {
-    setPreviewData(data);
+  const handleFileUpload = (result: {
+    uploaded_positions: number;
+    skipped_positions: number;
+    errors: string[];
+    upload_id: string;
+  }) => {
+    // Show success message
+    toast({
+      title: 'Upload Complete',
+      description: `Successfully uploaded ${result.uploaded_positions} positions${result.skipped_positions > 0 ? `, ${result.skipped_positions} skipped` : ''}`,
+      variant: result.errors.length > 0 ? 'destructive' : 'default'
+    });
+
+    // Refresh positions to show the newly uploaded data
+    if (result.uploaded_positions > 0) {
+      loadPositions();
+    }
+
+    // Clear preview data since we're now using direct upload
+    setPreviewData([]);
   };
 
   const handleDeletePreviewRow = (id: string) => {
@@ -262,7 +280,10 @@ export default function PortfolioPage() {
             {/* File Uploader */}
             <div className="bg-card rounded-lg border p-6">
               <h2 className="text-xl font-semibold mb-4">Upload Positions</h2>
-              <Uploader onFileUpload={handleFileUpload} />
+              <Uploader 
+                portfolioId={activePortfolioId} 
+                onFileUpload={handleFileUpload} 
+              />
             </div>
 
             {/* Preview Table */}

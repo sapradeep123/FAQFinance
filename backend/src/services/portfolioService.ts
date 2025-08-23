@@ -686,6 +686,164 @@ class PortfolioService {
       worst_performers: worstPerformers
     };
   }
+
+  async processUploadedPositions(
+    portfolioId: string,
+    userId: string,
+    positions: any[],
+    fileInfo: {
+      filename: string;
+      fileSize: number;
+      mimeType: string;
+    }
+  ): Promise<{
+    uploaded_positions: number;
+    skipped_positions: number;
+    errors: string[];
+    upload_id: string;
+  }> {
+    const client = await pool.connect();
+    const errors: string[] = [];
+    let uploadedCount = 0;
+    let skippedCount = 0;
+    
+    try {
+      await client.query('BEGIN');
+
+      // Verify portfolio ownership
+      const portfolio = await this.getPortfolio(portfolioId, userId);
+      if (!portfolio) {
+        throw createError(404, 'Portfolio not found');
+      }
+
+      // Create upload record
+      const uploadResult = await client.query(
+        `INSERT INTO portfolio_uploads 
+         (portfolio_id, filename, file_size, file_type, upload_status, created_at)
+         VALUES ($1, $2, $3, $4, 'processing', CURRENT_TIMESTAMP)
+         RETURNING id`,
+        [portfolioId, fileInfo.filename, fileInfo.fileSize, fileInfo.mimeType]
+      );
+      
+      const uploadId = uploadResult.rows[0].id;
+
+      // Process each position
+      for (const positionData of positions) {
+        try {
+          // Validate required fields
+          if (!positionData.ticker || !positionData.quantity || !positionData.avgCostCents) {
+            errors.push(`Skipped position: Missing required fields (ticker: ${positionData.ticker})`);
+            skippedCount++;
+            continue;
+          }
+
+          const ticker = positionData.ticker.toUpperCase();
+          const quantity = parseFloat(positionData.quantity);
+          const avgCostCents = parseInt(positionData.avgCostCents);
+
+          if (quantity <= 0 || avgCostCents <= 0) {
+            errors.push(`Skipped ${ticker}: Invalid quantity or price`);
+            skippedCount++;
+            continue;
+          }
+
+          // Check if position already exists
+          const existingResult = await client.query(
+            'SELECT id, quantity, avg_cost_cents FROM positions WHERE portfolio_id = $1 AND ticker = $2',
+            [portfolioId, ticker]
+          );
+
+          if (existingResult.rows.length > 0) {
+            // Update existing position (average cost calculation)
+            const existing = existingResult.rows[0];
+            const totalQuantity = existing.quantity + quantity;
+            const totalCost = (existing.quantity * existing.avg_cost_cents) + (quantity * avgCostCents);
+            const newAvgCost = Math.round(totalCost / totalQuantity);
+
+            await client.query(
+              `UPDATE positions 
+               SET quantity = $1, avg_cost_cents = $2, updated_at = CURRENT_TIMESTAMP
+               WHERE id = $3`,
+              [totalQuantity, newAvgCost, existing.id]
+            );
+          } else {
+            // Create new position
+            await client.query(
+              `INSERT INTO positions 
+               (portfolio_id, ticker, company_name, quantity, avg_cost_cents, 
+                sector, exchange, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+              [
+                portfolioId,
+                ticker,
+                positionData.companyName || null,
+                quantity,
+                avgCostCents,
+                positionData.sector || null,
+                positionData.exchange || null
+              ]
+            );
+          }
+
+          uploadedCount++;
+        } catch (error: any) {
+          errors.push(`Error processing ${positionData.ticker}: ${error.message}`);
+          skippedCount++;
+        }
+      }
+
+      // Update upload status
+      const finalStatus = errors.length > 0 ? 'completed_with_errors' : 'completed';
+      await client.query(
+        `UPDATE portfolio_uploads 
+         SET upload_status = $1, processed_at = CURRENT_TIMESTAMP,
+             positions_uploaded = $2, positions_skipped = $3, error_details = $4
+         WHERE id = $5`,
+        [finalStatus, uploadedCount, skippedCount, JSON.stringify(errors), uploadId]
+      );
+
+      // Recalculate portfolio totals
+      await this.recalculatePortfolioTotals(portfolioId, client);
+
+      await client.query('COMMIT');
+
+      return {
+        uploaded_positions: uploadedCount,
+        skipped_positions: skippedCount,
+        errors,
+        upload_id: uploadId
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async recalculatePortfolioTotals(portfolioId: string, client?: any): Promise<void> {
+    const queryClient = client || pool;
+    
+    // Calculate total cost and current value
+    const result = await queryClient.query(
+      `SELECT 
+        COALESCE(SUM(quantity * avg_cost_cents), 0) as total_cost_cents,
+        COUNT(*) as position_count
+       FROM positions 
+       WHERE portfolio_id = $1 AND quantity > 0`,
+      [portfolioId]
+    );
+
+    const { total_cost_cents } = result.rows[0];
+
+    // Update portfolio totals (we'll update market values when we fetch real-time data)
+    await queryClient.query(
+      `UPDATE portfolios 
+       SET total_cost_cents = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [total_cost_cents, portfolioId]
+    );
+  }
 }
 
 export const portfolioService = new PortfolioService();

@@ -5,6 +5,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card'
 import { useToast } from '../../hooks/use-toast'
+import { AdminFAQManagement } from '../../pages/admin/components/AdminFAQManagement'
 
 interface User {
   id: string
@@ -155,6 +156,17 @@ export function Admin() {
             )}
           >
             Logs
+          </button>
+          <button
+            onClick={() => setActiveTab('faq')}
+            className={cn(
+              'py-2 px-1 border-b-2 font-medium text-sm',
+              activeTab === 'faq'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            )}
+          >
+            FAQ Management
           </button>
         </nav>
       </div>
@@ -463,6 +475,10 @@ export function Admin() {
             </div>
           </div>
         </div>
+      )}
+
+      {activeTab === 'faq' && (
+        <AdminFAQManagement />
       )}
     </div>
   )
