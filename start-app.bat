@@ -105,8 +105,17 @@ echo ========================================
 echo    Application Started Successfully!
 echo ========================================
 echo.
-echo Backend running at: http://localhost:8080
+echo Backend running at: http://localhost:5000
 echo Frontend running at: http://localhost:5173
+echo.
+echo ========================================
+echo    Financial AI Assistant Features:
+echo ========================================
+echo - GPT API Integration (OpenAI, Anthropic, Google)
+echo - Financial Data Services (Yahoo Finance, Google Finance)
+echo - Finance-Only Prompt Filtering
+echo - Real-time Market Data
+echo - Admin System Settings
 echo.
 echo The application should open in your browser automatically.
 echo If not, please navigate to: http://localhost:5173
