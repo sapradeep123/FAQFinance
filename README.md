@@ -6,8 +6,9 @@ A full-stack financial assistant application with AI-powered chat, portfolio man
 
 - **Authentication System**: Secure login/signup with JWT tokens
 - **AI Chat Interface**: Interactive financial assistant powered by LLM
+- **FAQ System**: Comprehensive FAQ management with search and categorization
 - **Portfolio Management**: Track and analyze investment portfolios
-- **Admin Dashboard**: User management and system monitoring
+- **Admin Dashboard**: User management, FAQ management, and system monitoring
 - **Settings Management**: Customizable user preferences and keyboard shortcuts
 - **Responsive Design**: Modern UI built with React and Tailwind CSS
 
@@ -36,10 +37,32 @@ A full-stack financial assistant application with AI-powered chat, portfolio man
 
 ## 🛠️ Installation & Setup
 
+### Quick Start (Recommended)
+
+1. **Clone the Repository**
+   ```bash
+   git clone https://github.com/sapradeep123/FAQFinance.git
+   cd Trae
+   ```
+
+2. **One-Click Startup**
+   Simply double-click the `start-app.bat` file in the root directory!
+   
+   The batch file will:
+   - Check for Node.js installation
+   - Install dependencies automatically
+   - Set up environment files
+   - Start both backend and frontend servers
+   - Open the application in your browser
+
+### Manual Setup
+
+If you prefer manual setup or encounter issues with the batch file:
+
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/sapradeep123/FAQFinance.git
 cd Trae
 ```
 
@@ -83,7 +106,7 @@ Start the backend server:
 npm run dev
 ```
 
-The backend will be available at `http://localhost:5000`
+The backend will be available at `http://localhost:8080`
 
 ### 3. Frontend Setup
 
@@ -99,7 +122,7 @@ cp .env.example .env.local
 
 Edit `.env.local` file:
 ```env
-VITE_API_URL=http://localhost:5000
+VITE_API_URL=http://localhost:8080
 VITE_APP_NAME=Trae AI Financial Assistant
 ```
 
@@ -182,7 +205,14 @@ npm run lint         # Run ESLint
 ### AI Chat
 - Access via `/chat` route
 - Interactive financial assistant
+- Integrated FAQ sidebar for quick answers
 - Conversation history stored locally
+
+### FAQ System
+- Browse FAQs on the main chat page
+- Search functionality with keyword matching
+- Category-based organization
+- Admin can create, edit, and delete FAQs via `/admin`
 
 ### Portfolio Management
 - View at `/portfolio`
@@ -192,6 +222,7 @@ npm run lint         # Run ESLint
 ### Admin Dashboard
 - Available at `/admin` (admin users only)
 - User management
+- FAQ management (create, edit, delete FAQs)
 - System health monitoring
 
 ### Settings
