@@ -7,6 +7,19 @@ import { adminService } from '../services/adminService';
 import { newsService } from '../services/newsService';
 
 const router = Router();
+
+// Helper function to handle validation errors
+const handleValidationErrors = (req: Request, res: Response, next: any) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Validation failed',
+      errors: errors.array()
+    });
+  }
+  next();
+};
 // POST /api/chat/news-answer - News grounded JSON answer per contract
 router.post('/news-answer',
   body('user_query').isString().trim().isLength({ min: 5, max: 5000 }),
@@ -167,19 +180,6 @@ const searchValidation = [
     .isInt({ min: 1, max: 50 })
     .withMessage('Limit must be between 1 and 50')
 ];
-
-// Helper function to handle validation errors
-const handleValidationErrors = (req: Request, res: Response, next: any) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      success: false,
-      message: 'Validation failed',
-      errors: errors.array()
-    });
-  }
-  next();
-};
 
 // POST /api/chat/threads - Create a new chat thread
 router.post('/threads',

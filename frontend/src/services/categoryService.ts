@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../config/clientEnv';
+import { getAuthHeaders } from '../lib/auth';
 
 export interface Category {
   id: string;
@@ -7,18 +8,6 @@ export interface Category {
   is_active: boolean;
   created_at: string;
   updated_at: string;
-}
-
-function getAuthHeaders() {
-  const auth = localStorage.getItem('trae_auth');
-  let token: string | null = null;
-  try {
-    if (auth) token = JSON.parse(auth)?.token;
-  } catch {}
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  } as Record<string, string>;
 }
 
 export const categoryService = {

@@ -29,6 +29,20 @@ router.post('/'
   , validate
   , asyncHandler(async (req, res) => {
     const { name, sort_order } = req.body;
+    
+    // Check for duplicate category name
+    const duplicateCheck = await dbQuery(
+      'SELECT id FROM faq_categories WHERE LOWER(name) = LOWER($1) AND is_active = TRUE',
+      [name]
+    );
+    
+    if (duplicateCheck.rows.length > 0) {
+      return res.status(409).json({ 
+        success: false, 
+        message: 'A category with this name already exists' 
+      });
+    }
+    
     const result = await dbQuery(
       `INSERT INTO faq_categories (name, sort_order) VALUES ($1, $2)
        RETURNING id, name, sort_order, is_active, created_at, updated_at`,

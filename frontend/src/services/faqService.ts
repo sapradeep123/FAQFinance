@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../config/clientEnv';
+import { getAuthHeaders } from '../lib/auth';
 
 export interface FAQ {
   id: string;
@@ -66,17 +67,6 @@ export interface CreateFAQRequest {
 export interface UpdateFAQRequest extends Partial<CreateFAQRequest> {}
 
 class FAQService {
-  private getAuthHeaders() {
-    const auth = localStorage.getItem('trae_auth');
-    let token: string | null = null;
-    try {
-      if (auth) token = JSON.parse(auth)?.token;
-    } catch {}
-    return {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` })
-    };
-  }
 
   // Public FAQ endpoints
   async getFAQs(params?: {
@@ -92,7 +82,7 @@ class FAQService {
     if (params?.offset) searchParams.append('offset', params.offset.toString());
 
     const response = await fetch(`${API_BASE_URL}/faq?${searchParams}`, {
-      headers: this.getAuthHeaders()
+      headers: getAuthHeaders()
     });
 
     if (!response.ok) {
@@ -108,7 +98,7 @@ class FAQService {
     if (limit) searchParams.append('limit', limit.toString());
 
     const response = await fetch(`${API_BASE_URL}/faq/search?${searchParams}`, {
-      headers: this.getAuthHeaders()
+      headers: getAuthHeaders()
     });
 
     if (!response.ok) {
@@ -120,7 +110,7 @@ class FAQService {
 
   async getCategories(): Promise<FAQCategoriesResponse> {
     const response = await fetch(`${API_BASE_URL}/faq/categories`, {
-      headers: this.getAuthHeaders()
+      headers: getAuthHeaders()
     });
 
     if (!response.ok) {
@@ -132,7 +122,7 @@ class FAQService {
 
   async getFAQById(id: string): Promise<{ success: boolean; data: { faq: FAQ } }> {
     const response = await fetch(`${API_BASE_URL}/faq/${id}`, {
-      headers: this.getAuthHeaders()
+      headers: getAuthHeaders()
     });
 
     if (!response.ok) {
@@ -146,7 +136,7 @@ class FAQService {
   async createFAQ(faqData: CreateFAQRequest): Promise<{ success: boolean; message: string; data: { faq: FAQ } }> {
     const response = await fetch(`${API_BASE_URL}/faq`, {
       method: 'POST',
-      headers: this.getAuthHeaders(),
+      headers: getAuthHeaders(),
       body: JSON.stringify(faqData)
     });
 
@@ -161,7 +151,7 @@ class FAQService {
   async updateFAQ(id: string, faqData: UpdateFAQRequest): Promise<{ success: boolean; message: string; data: { faq: FAQ } }> {
     const response = await fetch(`${API_BASE_URL}/faq/${id}`, {
       method: 'PUT',
-      headers: this.getAuthHeaders(),
+      headers: getAuthHeaders(),
       body: JSON.stringify(faqData)
     });
 
@@ -176,7 +166,7 @@ class FAQService {
   async deleteFAQ(id: string): Promise<{ success: boolean; message: string }> {
     const response = await fetch(`${API_BASE_URL}/faq/${id}`, {
       method: 'DELETE',
-      headers: this.getAuthHeaders()
+      headers: getAuthHeaders()
     });
 
     if (!response.ok) {

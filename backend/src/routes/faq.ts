@@ -535,6 +535,16 @@ router.post('/',
     try {
       const { category, question, answer, keywords, sortOrder, status } = req.body;
       
+      // Check for duplicate question
+      const duplicateCheck = await dbQuery(
+        'SELECT id FROM faqs WHERE LOWER(question) = LOWER($1) AND is_active = TRUE',
+        [question]
+      );
+      
+      if (duplicateCheck.rows.length > 0) {
+        throw createError('An FAQ with this question already exists', 409);
+      }
+      
       const query = `
         INSERT INTO faqs (category, question, answer, keywords, sort_order, status)
         VALUES ($1, $2, $3, $4, $5, $6)
@@ -542,9 +552,9 @@ router.post('/',
       `;
       
       const result = await dbQuery(query, [
+        category,
         question,
         answer,
-        category,
         keywords || '',
         sortOrder || 0,
         status || 'ACTIVE'

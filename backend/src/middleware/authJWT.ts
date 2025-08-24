@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { config } from '../config/config';
+import { jwtConfig } from '../config/config';
 import { createError } from './errorHandler';
 
 export interface AuthenticatedRequest extends Request {
@@ -23,18 +23,18 @@ export interface JWTPayload {
 
 // Generate JWT token
 export const generateToken = (payload: Omit<JWTPayload, 'iat' | 'exp'>): string => {
-  return jwt.sign(payload, config.jwt.secret, {
-    expiresIn: config.jwt.expiresIn,
+  return jwt.sign(payload, jwtConfig.secret, {
+    expiresIn: jwtConfig.expiresIn,
   });
 };
 
 // Verify JWT token
 export const verifyToken = (token: string): JWTPayload => {
   try {
-    return jwt.verify(token, config.jwt.secret) as JWTPayload;
+    return jwt.verify(token, jwtConfig.secret) as JWTPayload;
   } catch (error) {
     if (error instanceof jwt.TokenExpiredError) {
-      throw createError('Token has expired', 401);
+      throw createError('Invalid token', 401);
     } else if (error instanceof jwt.JsonWebTokenError) {
       throw createError('Invalid token', 401);
     } else {

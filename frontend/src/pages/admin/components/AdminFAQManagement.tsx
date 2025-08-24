@@ -70,13 +70,9 @@ export function AdminFAQManagement() {
       setFaqs(response.data.faqs);
     } catch (error) {
       console.error('Failed to load FAQs:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to load FAQs',
-        variant: 'destructive'
-      });
+      toast.error('Failed to load FAQs');
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
   };
 
@@ -86,11 +82,7 @@ export function AdminFAQManagement() {
       setCategories(list);
     } catch (error) {
       console.error('Failed to load categories:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to load categories',
-        variant: 'destructive'
-      });
+      toast.error('Failed to load categories');
     }
   };
 
@@ -139,23 +131,21 @@ export function AdminFAQManagement() {
         status: formData.status as any
       };
 
-      await faqService.createFAQ(createData);
-      toast({
-        title: 'Success',
-        description: 'FAQ created successfully'
-      });
+      const newFAQ = await faqService.createFAQ(createData);
+      toast.success('FAQ created successfully');
+      
+      // Update local state immediately for better UX
+      setFaqs(prev => [newFAQ.data.faq, ...prev]);
       
       setIsCreateDialogOpen(false);
       setFormData(initialFormData);
       setFormErrors({});
-      loadFAQs();
+      
+      // Also refresh from server to ensure consistency
+      await loadFAQs();
     } catch (error) {
       console.error('Failed to create FAQ:', error);
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to create FAQ',
-        variant: 'destructive'
-      });
+      toast.error(error instanceof Error ? error.message : 'Failed to create FAQ');
     }
   };
 
@@ -172,24 +162,24 @@ export function AdminFAQManagement() {
         status: formData.status as any
       };
 
-      await faqService.updateFAQ(editingFaq.id, updateData);
-      toast({
-        title: 'Success',
-        description: 'FAQ updated successfully'
-      });
+      const updatedFAQ = await faqService.updateFAQ(editingFaq.id, updateData);
+      toast.success('FAQ updated successfully');
+      
+      // Update local state immediately for better UX
+      setFaqs(prev => prev.map(faq => 
+        faq.id === editingFaq.id ? updatedFAQ.data.faq : faq
+      ));
       
       setIsEditDialogOpen(false);
       setEditingFaq(null);
       setFormData(initialFormData);
       setFormErrors({});
-      loadFAQs();
+      
+      // Also refresh from server to ensure consistency
+      await loadFAQs();
     } catch (error) {
       console.error('Failed to update FAQ:', error);
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to update FAQ',
-        variant: 'destructive'
-      });
+      toast.error(error instanceof Error ? error.message : 'Failed to update FAQ');
     }
   };
 
@@ -200,18 +190,16 @@ export function AdminFAQManagement() {
 
     try {
       await faqService.deleteFAQ(faq.id);
-      toast({
-        title: 'Success',
-        description: 'FAQ deleted successfully'
-      });
-      loadFAQs();
+      toast.success('FAQ deleted successfully');
+      
+      // Update local state immediately for better UX
+      setFaqs(prev => prev.filter(f => f.id !== faq.id));
+      
+      // Also refresh from server to ensure consistency
+      await loadFAQs();
     } catch (error) {
       console.error('Failed to delete FAQ:', error);
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to delete FAQ',
-        variant: 'destructive'
-      });
+      toast.error(error instanceof Error ? error.message : 'Failed to delete FAQ');
     }
   };
 
@@ -556,32 +544,44 @@ export function AdminFAQManagement() {
                 <Badge className={cat.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}>
                   {cat.is_active ? 'Active' : 'Inactive'}
                 </Badge>
-                <Button size="sm" variant="outline" onClick={async () => {
-                  const newName = prompt('Edit category name', cat.name);
-                  if (newName && newName.trim() && newName !== cat.name) {
-                    try {
-                      await categoryService.update(cat.id, { name: newName.trim() });
-                      toast.success('Category updated');
-                      loadCategories();
-                    } catch (e: any) {
-                      toast.error(e?.message || 'Failed to update category');
-                    }
-                  }
-                }}>
-                  Edit
-                </Button>
-                <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700 hover:bg-red-50" onClick={async () => {
-                  if (!confirm(`Soft delete category "${cat.name}"?`)) return;
-                  try {
-                    await categoryService.remove(cat.id);
-                    toast.success('Category deleted');
-                    loadCategories();
-                  } catch (e: any) {
-                    toast.error(e?.message || 'Failed to delete category');
-                  }
-                }}>
-                  Delete
-                </Button>
+                                 <Button size="sm" variant="outline" onClick={async () => {
+                   const newName = prompt('Edit category name', cat.name);
+                   if (newName && newName.trim() && newName !== cat.name) {
+                     try {
+                       const updatedCategory = await categoryService.update(cat.id, { name: newName.trim() });
+                       toast.success('Category updated successfully');
+                       
+                       // Update local state immediately for better UX
+                       setCategories(prev => prev.map(c => 
+                         c.id === cat.id ? updatedCategory : c
+                       ));
+                       
+                       // Also refresh from server to ensure consistency
+                       await loadCategories();
+                     } catch (e: any) {
+                       toast.error(e?.message || 'Failed to update category');
+                     }
+                   }
+                 }}>
+                   Edit
+                 </Button>
+                                 <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700 hover:bg-red-50" onClick={async () => {
+                   if (!confirm(`Soft delete category "${cat.name}"?`)) return;
+                   try {
+                     await categoryService.remove(cat.id);
+                     toast.success('Category deleted successfully');
+                     
+                     // Update local state immediately for better UX
+                     setCategories(prev => prev.filter(c => c.id !== cat.id));
+                     
+                     // Also refresh from server to ensure consistency
+                     await loadCategories();
+                   } catch (e: any) {
+                     toast.error(e?.message || 'Failed to delete category');
+                   }
+                 }}>
+                   Delete
+                 </Button>
               </div>
             ))}
           </div>
@@ -591,8 +591,13 @@ export function AdminFAQManagement() {
               const name = prompt('New category name');
               if (!name || !name.trim()) return;
               try {
-                await categoryService.create({ name: name.trim() });
-                toast.success('Category created');
+                const newCategory = await categoryService.create({ name: name.trim() });
+                toast.success('Category created successfully');
+                
+                // Update local state immediately for better UX
+                setCategories(prev => [...prev, newCategory]);
+                
+                // Also refresh from server to ensure consistency
                 await loadCategories();
               } catch (e: any) {
                 toast.error(e?.message || 'Failed to create category');
