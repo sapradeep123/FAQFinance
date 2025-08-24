@@ -211,20 +211,57 @@ class ChatService {
 
       const userMessage = userMessageResult.rows[0];
 
-      // Process with LLM service - use askAllProviders instead of processInquiry
-      const providerResponses = await llmService.askAllProviders(
-        inquiry.question,
-        inquiry.context,
-        inquiry.user_id
+      // First try to answer from internal FAQs to avoid unnecessary GPT calls
+      const likeQuery = `%${inquiry.question.toLowerCase()}%`;
+      const faqResult = await queryFn(
+        `SELECT id, question, answer, category
+         FROM faqs
+         WHERE status = 'ACTIVE'
+           AND (
+             LOWER(question) LIKE ? OR
+             LOWER(answer) LIKE ? OR
+             LOWER(COALESCE(keywords, '')) LIKE ?
+           )
+         ORDER BY sort_order ASC, created_at DESC
+         LIMIT 1`,
+        [likeQuery, likeQuery, likeQuery]
       );
 
-      // Get the first response as the answer
-      const llmResponse = providerResponses[0] || {
-        provider: 'openai',
-        answer: 'I apologize, but I was unable to generate a response at this time.',
-        confidence: 0,
-        response_time_ms: 0
-      };
+      let finalAnswer: string | null = null;
+      let answerMetadata: Record<string, any> = {};
+
+      if (faqResult.rows.length > 0) {
+        const faq = faqResult.rows[0];
+        finalAnswer = faq.answer;
+        answerMetadata = {
+          source: 'FAQ',
+          faqId: faq.id,
+          category: faq.category
+        };
+      } else {
+        // No FAQ match found → fall back to LLM providers
+        const providerResponses = await llmService.askAllProviders(
+          inquiry.question,
+          inquiry.context,
+          inquiry.user_id
+        );
+
+        const llmResponse = providerResponses[0] || {
+          provider: 'openai',
+          answer: 'I apologize, but I was unable to generate a response at this time.',
+          confidence: 0,
+          response_time_ms: 0
+        };
+
+        finalAnswer = llmResponse.answer;
+        answerMetadata = {
+          source: 'LLM',
+          provider: llmResponse.provider,
+          model: 'gpt-3.5-turbo',
+          tokensUsed: llmResponse.tokens_used || 0,
+          responseTime: llmResponse.response_time_ms
+        };
+      }
 
       // Create assistant message
       const assistantMessageResult = await queryFn(
@@ -232,16 +269,11 @@ class ChatService {
          VALUES (?, ?, ?, ?, ?)
          RETURNING id, thread_id, role, content, inquiry_id, created_at, metadata`,
         [
-          threadId, 
-          'ASSISTANT', 
-          llmResponse.answer, 
-          inquiry.id, 
-          JSON.stringify({
-            provider: llmResponse.provider,
-            model: 'gpt-3.5-turbo',
-            tokensUsed: llmResponse.tokens_used || 0,
-            responseTime: llmResponse.response_time_ms
-          })
+          threadId,
+          'ASSISTANT',
+          finalAnswer!,
+          inquiry.id,
+          JSON.stringify(answerMetadata)
         ]
       );
 
@@ -252,12 +284,7 @@ class ChatService {
         `UPDATE inquiries 
          SET status = 'COMPLETED', updated_at = CURRENT_TIMESTAMP, metadata = ?
          WHERE id = ?`,
-        [JSON.stringify({ 
-          provider: llmResponse.provider,
-          model: 'gpt-3.5-turbo',
-          tokensUsed: llmResponse.tokens_used || 0,
-          responseTime: llmResponse.response_time_ms
-        }), inquiry.id]
+        [JSON.stringify(answerMetadata), inquiry.id]
       );
 
       // Update thread message count and last message time

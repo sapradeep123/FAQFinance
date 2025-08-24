@@ -8,6 +8,13 @@ import { query as dbQuery } from '../config/database';
 
 const router = Router();
 
+// Local helpers for typed access to req.user
+const hasUser = (req: Request): boolean => Boolean((req as any).user);
+const getUserId = (req: Request): string | undefined => {
+  const u = (req as any).user;
+  return u?.userId !== undefined && u?.userId !== null ? String(u.userId) : undefined;
+};
+
 // Validation middleware
 const createFaqValidation = [
   body('category')
@@ -115,7 +122,7 @@ const searchFaqsValidation = [
 ];
 
 // Helper function to handle validation errors
-const handleValidationErrors = (req: Request, res: Response, next: any) => {
+const handleValidationErrors = (req: Request, res: Response, next: any): any => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({
@@ -169,13 +176,13 @@ router.get('/',
       const faqs = result.rows;
 
       // Log successful FAQs fetch
-      if (req.user) {
+      if (hasUser(req)) {
         await adminService.logUsage(
           '/api/faq',
           'GET',
           200,
           Date.now() - startTime,
-          req.user.userId,
+          getUserId(req),
           req.ip,
           req.get('User-Agent')
         );
@@ -198,13 +205,13 @@ router.get('/',
       });
     } catch (error: any) {
       // Log failed FAQs fetch
-      if (req.user) {
+      if (hasUser(req)) {
         await adminService.logUsage(
           '/api/faq',
           'GET',
           error.statusCode || 500,
           Date.now() - startTime,
-          req.user.userId,
+          getUserId(req),
           req.ip,
           req.get('User-Agent'),
           error.message
@@ -251,19 +258,19 @@ router.get('/search',
       params.push(limit);
       
       const result = await dbQuery(query, params);
-      const faqs = result.rows.map(row => {
+      const faqs = result.rows.map((row: any) => {
         const { rank, ...faq } = row;
         return faq;
       });
 
       // Log successful FAQ search
-      if (req.user) {
+      if (hasUser(req)) {
         await adminService.logUsage(
           '/api/faq/search',
           'GET',
           200,
           Date.now() - startTime,
-          req.user.userId,
+          getUserId(req),
           req.ip,
           req.get('User-Agent')
         );
@@ -280,13 +287,13 @@ router.get('/search',
       });
     } catch (error: any) {
       // Log failed FAQ search
-      if (req.user) {
+      if (hasUser(req)) {
         await adminService.logUsage(
           '/api/faq/search',
           'GET',
           error.statusCode || 500,
           Date.now() - startTime,
-          req.user.userId,
+          getUserId(req),
           req.ip,
           req.get('User-Agent'),
           error.message
@@ -321,13 +328,13 @@ router.get('/categories',
       const categories = result.rows;
 
       // Log successful categories fetch
-      if (req.user) {
+      if (hasUser(req)) {
         await adminService.logUsage(
           '/api/faq/categories',
           'GET',
           200,
           Date.now() - startTime,
-          req.user.userId,
+          getUserId(req),
           req.ip,
           req.get('User-Agent')
         );
@@ -339,13 +346,13 @@ router.get('/categories',
       });
     } catch (error: any) {
       // Log failed categories fetch
-      if (req.user) {
+      if (hasUser(req)) {
         await adminService.logUsage(
           '/api/faq/categories',
           'GET',
           error.statusCode || 500,
           Date.now() - startTime,
-          req.user.userId,
+          getUserId(req),
           req.ip,
           req.get('User-Agent'),
           error.message
@@ -376,24 +383,25 @@ router.get('/:faqId',
       const result = await dbQuery(query, [faqId]);
       
       if (result.rows.length === 0) {
-        throw createError(404, 'FAQ not found');
+        throw createError('FAQ not found', 404);
       }
       
       const faq = result.rows[0];
       
       // Only return inactive FAQs to admins
-      if (faq.status === 'INACTIVE' && (!req.user || req.user.role !== 'ADMIN')) {
-        throw createError(404, 'FAQ not found');
+      const u: any = (req as any).user;
+      if (faq.status === 'INACTIVE' && (!u || u.role !== 'ADMIN')) {
+        throw createError('FAQ not found', 404);
       }
 
       // Log successful FAQ fetch
-      if (req.user) {
+      if (hasUser(req)) {
         await adminService.logUsage(
           '/api/faq/:faqId',
           'GET',
           200,
           Date.now() - startTime,
-          req.user.userId,
+          getUserId(req),
           req.ip,
           req.get('User-Agent')
         );
@@ -405,13 +413,13 @@ router.get('/:faqId',
       });
     } catch (error: any) {
       // Log failed FAQ fetch
-      if (req.user) {
+      if (hasUser(req)) {
         await adminService.logUsage(
           '/api/faq/:faqId',
           'GET',
           error.statusCode || 500,
           Date.now() - startTime,
-          req.user.userId,
+          getUserId(req),
           req.ip,
           req.get('User-Agent'),
           error.message
@@ -425,6 +433,97 @@ router.get('/:faqId',
 // Admin-only routes below this point
 router.use(authenticateToken);
 router.use(requireAdmin);
+
+// POST /api/faq/generate - Generate an FAQ using GPT providers (admin only)
+router.post('/generate',
+  body('prompt').isString().trim().isLength({ min: 10, max: 1000 }),
+  body('category').optional().isString().trim(),
+  handleValidationErrors,
+  asyncHandler(async (req: Request, res: Response) => {
+    const startTime = Date.now();
+
+    try {
+      const { prompt, category, save } = req.body as { prompt: string; category?: string; save?: boolean };
+
+      // Use Postgres FTS first to suggest similar FAQs to avoid duplication
+      const similar = await dbQuery(`
+        SELECT id, category, question, answer, sort_order
+        FROM faqs
+        WHERE to_tsvector('english', question || ' ' || answer || ' ' || COALESCE(keywords, ''))
+              @@ plainto_tsquery('english', $1)
+        ORDER BY sort_order ASC
+        LIMIT 3
+      `, [prompt]);
+
+      // Call LLM providers via admin-configured GPTs
+      // Import lazily to avoid cycle
+      const { llmService } = await import('../services/llmService');
+      const providerResponses = await llmService.askAllProviders(prompt, undefined, getUserId(req));
+
+      // Choose first/highest-confidence response for suggested FAQ
+      const best = providerResponses.find(r => !r.error && r.answer) || providerResponses[0];
+      const suggestedQuestion = prompt;
+      const suggestedAnswer = best?.answer || 'Unable to generate an answer at this time.';
+
+      let createdFaq: any | undefined;
+      if (save) {
+        // Validate category if provided
+        if (category) {
+          const catRes = await dbQuery('SELECT 1 FROM faq_categories WHERE name = $1 AND is_active = TRUE', [category]);
+          if (catRes.rows.length === 0) {
+            throw createError('Category does not exist or is inactive', 400);
+          }
+        }
+        const insert = await dbQuery(
+          `INSERT INTO faqs (category, question, answer, keywords, sort_order, status)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING id, category, question, answer, keywords, sort_order, status, created_at, updated_at`,
+          [category || 'GENERAL', suggestedQuestion, suggestedAnswer, '', 0, 'ACTIVE']
+        );
+        createdFaq = insert.rows[0];
+      }
+
+      // Log usage
+      await adminService.logUsage(
+        '/api/faq/generate',
+        'POST',
+        200,
+        Date.now() - startTime,
+        getUserId(req),
+        req.ip,
+        req.get('User-Agent')
+      );
+
+      res.status(200).json({
+        success: true,
+        message: 'Generated FAQ suggestion',
+        data: {
+          suggestion: {
+            question: suggestedQuestion,
+            answer: suggestedAnswer,
+            provider: best?.provider,
+            confidence: best?.confidence || 0
+          },
+          similar: similar.rows,
+          saved: Boolean(createdFaq),
+          faq: createdFaq
+        }
+      });
+    } catch (error: any) {
+      await adminService.logUsage(
+        '/api/faq/generate',
+        'POST',
+        error.statusCode || 500,
+        Date.now() - startTime,
+        getUserId(req),
+        req.ip,
+        req.get('User-Agent'),
+        error.message
+      );
+      throw error;
+    }
+  })
+);
 
 // POST /api/faq - Create a new FAQ (admin only)
 router.post('/',
@@ -459,7 +558,7 @@ router.post('/',
         'POST',
         201,
         Date.now() - startTime,
-        req.user!.userId,
+        getUserId(req)!,
         req.ip,
         req.get('User-Agent')
       );
@@ -476,7 +575,7 @@ router.post('/',
         'POST',
         error.statusCode || 500,
         Date.now() - startTime,
-        req.user?.userId,
+        getUserId(req),
         req.ip,
         req.get('User-Agent'),
         error.message
@@ -513,7 +612,7 @@ router.put('/:faqId',
       }
       
       if (updateFields.length === 0) {
-        throw createError(400, 'No valid fields to update');
+        throw createError('No valid fields to update', 400);
       }
       
       updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
@@ -529,7 +628,7 @@ router.put('/:faqId',
       const result = await dbQuery(query, params);
       
       if (result.rows.length === 0) {
-        throw createError(404, 'FAQ not found');
+        throw createError('FAQ not found', 404);
       }
       
       const faq = result.rows[0];
@@ -540,7 +639,7 @@ router.put('/:faqId',
         'PUT',
         200,
         Date.now() - startTime,
-        req.user!.userId,
+        getUserId(req)!,
         req.ip,
         req.get('User-Agent')
       );
@@ -557,7 +656,7 @@ router.put('/:faqId',
         'PUT',
         error.statusCode || 500,
         Date.now() - startTime,
-        req.user?.userId,
+        getUserId(req),
         req.ip,
         req.get('User-Agent'),
         error.message
@@ -581,7 +680,7 @@ router.delete('/:faqId',
       const result = await dbQuery(query, [faqId]);
       
       if (result.rows.length === 0) {
-        throw createError(404, 'FAQ not found');
+        throw createError('FAQ not found', 404);
       }
 
       // Log successful FAQ deletion
@@ -590,7 +689,7 @@ router.delete('/:faqId',
         'DELETE',
         200,
         Date.now() - startTime,
-        req.user!.userId,
+        getUserId(req)!,
         req.ip,
         req.get('User-Agent')
       );
@@ -606,7 +705,7 @@ router.delete('/:faqId',
         'DELETE',
         error.statusCode || 500,
         Date.now() - startTime,
-        req.user?.userId,
+        getUserId(req),
         req.ip,
         req.get('User-Agent'),
         error.message
