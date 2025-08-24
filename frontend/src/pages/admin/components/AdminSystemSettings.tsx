@@ -67,6 +67,9 @@ export function AdminSystemSettings() {
   const [newsDomains, setNewsDomains] = useState<string>('finance.yahoo.com\nbusinessinsider.com\nmoneyweek.com\ninvesting.com');
   const [regionPref, setRegionPref] = useState<'US' | 'EU' | 'WW'>('US');
   const [timeWindow, setTimeWindow] = useState<number>(30);
+  const [testQuery, setTestQuery] = useState<string>('What is the latest on NVDA earnings?');
+  const [testLoading, setTestLoading] = useState<boolean>(false);
+  const [testResult, setTestResult] = useState<any>(null);
 
   // Initialize default configs
   useEffect(() => {
@@ -155,6 +158,49 @@ export function AdminSystemSettings() {
       toast.error('Failed to save system settings');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const testNewsAnswer = async () => {
+    if (!testQuery.trim()) {
+      toast.error('Enter a question to test');
+      return;
+    }
+
+    setTestLoading(true);
+    setTestResult(null);
+    try {
+      const token = JSON.parse(localStorage.getItem('trae_auth') || '{}')?.token;
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      };
+
+      const sites = newsDomains
+        .split(/\r?\n|,/) 
+        .map(s => s.trim())
+        .filter(Boolean)
+        .slice(0, 5);
+
+      const res = await fetch(`${API_BASE_URL}/chat/news-answer`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          user_query: testQuery.trim(),
+          admin_allowed_sites: sites.length ? sites : undefined,
+          region_preference: regionPref,
+          time_window_days: timeWindow
+        })
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error?.message || json?.message || 'Failed to get news answer');
+      setTestResult(json);
+      toast.success('Received response');
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to get news answer');
+    } finally {
+      setTestLoading(false);
     }
   };
 
@@ -358,6 +404,35 @@ export function AdminSystemSettings() {
                   />
                 </div>
               </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Test News Answer</CardTitle>
+              <p className="text-sm text-muted-foreground">Send a question using the settings above and view the JSON result.</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="test-query">Question</Label>
+                <Textarea
+                  id="test-query"
+                  placeholder="e.g., What did the Fed signal this week?"
+                  value={testQuery}
+                  onChange={(e) => setTestQuery(e.target.value)}
+                  className="min-h-[80px]"
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button onClick={testNewsAnswer} disabled={testLoading}>
+                  {testLoading ? 'Testing…' : 'Test News Answer'}
+                </Button>
+              </div>
+              {testResult && (
+                <div className="mt-4 p-3 border rounded bg-muted text-xs overflow-auto max-h-96">
+                  <pre className="whitespace-pre-wrap break-words">{JSON.stringify(testResult, null, 2)}</pre>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
