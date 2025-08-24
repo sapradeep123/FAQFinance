@@ -26,10 +26,45 @@ router.post('/news-answer',
         time_window_days?: number;
       };
 
+      // Load admin-configured defaults from system settings
+      // Keys: news.allowed_sites (newline or comma-separated), news.region, news.window_days
+      let effectiveSites: string[] | undefined = undefined;
+      let effectiveRegion: 'US' | 'EU' | 'WW' | undefined = undefined;
+      let effectiveWindow: number | undefined = undefined;
+
+      try {
+        const settings = await adminService.getSystemSettings();
+        const getVal = (key: string) => settings.find((s: any) => s.key === key)?.value as string | undefined;
+
+        if (!admin_allowed_sites) {
+          const sitesRaw = getVal('news.allowed_sites');
+          if (sitesRaw) {
+            const split = sitesRaw
+              .split(/\r?\n|,/)
+              .map(s => s.trim())
+              .filter(Boolean);
+            if (split.length > 0) effectiveSites = split.slice(0, 5);
+          }
+        }
+
+        if (!region_preference) {
+          const r = getVal('news.region');
+          if (r === 'US' || r === 'EU' || r === 'WW') effectiveRegion = r;
+        }
+
+        if (!time_window_days) {
+          const w = getVal('news.window_days');
+          const n = w ? parseInt(w, 10) : NaN;
+          if (!Number.isNaN(n) && n > 0 && n <= 365) effectiveWindow = n;
+        }
+      } catch (e) {
+        // Non-fatal: proceed with provided values or defaults in service
+      }
+
       const result = await newsService.answerFromNews(user_query, {
-        admin_allowed_sites,
-        region_preference,
-        time_window_days
+        admin_allowed_sites: admin_allowed_sites ?? effectiveSites,
+        region_preference: region_preference ?? effectiveRegion,
+        time_window_days: time_window_days ?? effectiveWindow
       });
 
       await adminService.logUsage(
