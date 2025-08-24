@@ -7,18 +7,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../components/ui/select';
 import { Textarea } from '../../../components/ui/textarea';
 import { Label } from '../../../components/ui/label';
-import { useToast } from '../../../hooks/use-toast';
+import { useToast } from '../../../hooks/useToast';
 import { faqService, FAQ, CreateFAQRequest, UpdateFAQRequest } from '../../../services/faqService';
+import { categoryService, type Category } from '../../../services/categoryService';
 import { PlusIcon, PencilIcon, TrashIcon, MagnifyingGlassIcon, EyeIcon } from '@heroicons/react/24/outline';
 
-const categoryOptions = [
-  { value: 'BANKING', label: 'Banking', icon: '🏦' },
-  { value: 'LOANS', label: 'Loans', icon: '💰' },
-  { value: 'INVESTMENTS', label: 'Investments', icon: '📈' },
-  { value: 'TAX', label: 'Tax', icon: '📊' },
-  { value: 'CARDS', label: 'Cards', icon: '💳' },
-  { value: 'GENERAL', label: 'General', icon: '❓' }
-];
+// Dynamic categories will be loaded from API; fallback icons
+const categoryIcon = '❓';
 
 const statusOptions = [
   { value: 'ACTIVE', label: 'Active', color: 'bg-green-100 text-green-800' },
@@ -47,6 +42,7 @@ const initialFormData: FAQFormData = {
 export function AdminFAQManagement() {
   const [faqs, setFaqs] = useState<FAQ[]>([]);
   const [loading, setLoading] = useState(true);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
@@ -61,6 +57,7 @@ export function AdminFAQManagement() {
 
   useEffect(() => {
     loadFAQs();
+    loadCategories();
   }, []);
 
   const loadFAQs = async () => {
@@ -80,6 +77,20 @@ export function AdminFAQManagement() {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadCategories = async () => {
+    try {
+      const list = await categoryService.list();
+      setCategories(list);
+    } catch (error) {
+      console.error('Failed to load categories:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to load categories',
+        variant: 'destructive'
+      });
     }
   };
 
@@ -256,12 +267,11 @@ export function AdminFAQManagement() {
     return matchesSearch && matchesCategory && matchesStatus;
   });
 
-  const getCategoryIcon = (category: string) => {
-    return categoryOptions.find(opt => opt.value === category)?.icon || '❓';
-  };
+  const getCategoryIcon = (_category: string) => categoryIcon;
 
   const getCategoryLabel = (category: string) => {
-    return categoryOptions.find(opt => opt.value === category)?.label || category;
+    const found = categories.find(c => c.id === category || c.name === category);
+    return found?.name || category;
   };
 
   const getStatusBadge = (status: string) => {
@@ -282,11 +292,11 @@ export function AdminFAQManagement() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {categoryOptions.map(option => (
-              <SelectItem key={option.value} value={option.value}>
+            {categories.map(option => (
+              <SelectItem key={option.id} value={option.name}>
                 <span className="flex items-center gap-2">
-                  <span>{option.icon}</span>
-                  <span>{option.label}</span>
+                  <span>{categoryIcon}</span>
+                  <span>{option.name}</span>
                 </span>
               </SelectItem>
             ))}
@@ -416,11 +426,11 @@ export function AdminFAQManagement() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="ALL">All Categories</SelectItem>
-            {categoryOptions.map(option => (
-              <SelectItem key={option.value} value={option.value}>
+            {categories.map(option => (
+              <SelectItem key={option.id} value={option.name}>
                 <span className="flex items-center gap-2">
-                  <span>{option.icon}</span>
-                  <span>{option.label}</span>
+                  <span>{categoryIcon}</span>
+                  <span>{option.name}</span>
                 </span>
               </SelectItem>
             ))}
@@ -530,6 +540,69 @@ export function AdminFAQManagement() {
           ))
         )}
       </div>
+
+      {/* Category Management */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Category Management</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {categories.map(cat => (
+              <div key={cat.id} className="flex items-center gap-2 border rounded px-2 py-1">
+                <span>{categoryIcon}</span>
+                <span className="font-medium">{cat.name}</span>
+                <span className="text-xs text-gray-500">Order: {cat.sort_order ?? 0}</span>
+                <Badge className={cat.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}>
+                  {cat.is_active ? 'Active' : 'Inactive'}
+                </Badge>
+                <Button size="sm" variant="outline" onClick={async () => {
+                  const newName = prompt('Edit category name', cat.name);
+                  if (newName && newName.trim() && newName !== cat.name) {
+                    try {
+                      await categoryService.update(cat.id, { name: newName.trim() });
+                      toast.success('Category updated');
+                      loadCategories();
+                    } catch (e: any) {
+                      toast.error(e?.message || 'Failed to update category');
+                    }
+                  }
+                }}>
+                  Edit
+                </Button>
+                <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700 hover:bg-red-50" onClick={async () => {
+                  if (!confirm(`Soft delete category "${cat.name}"?`)) return;
+                  try {
+                    await categoryService.remove(cat.id);
+                    toast.success('Category deleted');
+                    loadCategories();
+                  } catch (e: any) {
+                    toast.error(e?.message || 'Failed to delete category');
+                  }
+                }}>
+                  Delete
+                </Button>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <Input placeholder="New category name" value={''} onChange={() => {}} className="hidden" />
+            <Button onClick={async () => {
+              const name = prompt('New category name');
+              if (!name || !name.trim()) return;
+              try {
+                await categoryService.create({ name: name.trim() });
+                toast.success('Category created');
+                await loadCategories();
+              } catch (e: any) {
+                toast.error(e?.message || 'Failed to create category');
+              }
+            }}>
+              Add Category
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Create FAQ Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>

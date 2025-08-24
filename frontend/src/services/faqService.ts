@@ -2,7 +2,7 @@ import { API_BASE_URL } from '../config/clientEnv';
 
 export interface FAQ {
   id: string;
-  category: 'BANKING' | 'LOANS' | 'INVESTMENTS' | 'TAX' | 'CARDS' | 'GENERAL';
+  category: string;
   question: string;
   answer: string;
   keywords?: string[];
@@ -55,7 +55,7 @@ export interface FAQCategoriesResponse {
 }
 
 export interface CreateFAQRequest {
-  category: 'BANKING' | 'LOANS' | 'INVESTMENTS' | 'TAX' | 'CARDS' | 'GENERAL';
+  category: string;
   question: string;
   answer: string;
   keywords?: string;
@@ -67,7 +67,11 @@ export interface UpdateFAQRequest extends Partial<CreateFAQRequest> {}
 
 class FAQService {
   private getAuthHeaders() {
-    const token = localStorage.getItem('token');
+    const auth = localStorage.getItem('trae_auth');
+    let token: string | null = null;
+    try {
+      if (auth) token = JSON.parse(auth)?.token;
+    } catch {}
     return {
       'Content-Type': 'application/json',
       ...(token && { Authorization: `Bearer ${token}` })
