@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../../components/ui
 import { Alert, AlertDescription } from '../../../components/ui/alert';
 import { Settings, Key, TestTube, CheckCircle, XCircle, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
+import { API_BASE_URL } from '../../../config/clientEnv';
 
 interface GPTProvider {
   id: string;
@@ -63,6 +64,9 @@ export function AdminSystemSettings() {
   const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [newsDomains, setNewsDomains] = useState<string>('finance.yahoo.com\nbusinessinsider.com\nmoneyweek.com\ninvesting.com');
+  const [regionPref, setRegionPref] = useState<'US' | 'EU' | 'WW'>('US');
+  const [timeWindow, setTimeWindow] = useState<number>(30);
 
   // Initialize default configs
   useEffect(() => {
@@ -117,9 +121,36 @@ export function AdminSystemSettings() {
   const saveConfiguration = async () => {
     setLoading(true);
     try {
-      // Simulate save - in real implementation, this would call the backend
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      toast.success('System settings saved successfully!');
+      // Persist news settings via system-settings API
+      const token = JSON.parse(localStorage.getItem('trae_auth') || '{}')?.token;
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      };
+
+      const writes = [
+        fetch(`${API_BASE_URL}/admin/system-settings`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({ key: 'news.allowed_sites', value: newsDomains, category: 'news' })
+        }),
+        fetch(`${API_BASE_URL}/admin/system-settings`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({ key: 'news.region', value: regionPref, category: 'news' })
+        }),
+        fetch(`${API_BASE_URL}/admin/system-settings`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({ key: 'news.window_days', value: String(timeWindow), category: 'news' })
+        })
+      ];
+
+      const responses = await Promise.all(writes);
+      const ok = responses.every(r => r.ok);
+      if (!ok) throw new Error('Failed to save one or more settings');
+
+      toast.success('System settings saved successfully');
     } catch (error) {
       toast.error('Failed to save system settings');
     } finally {
@@ -153,7 +184,7 @@ export function AdminSystemSettings() {
       <Tabs defaultValue="gpt-providers" className="space-y-6">
         <TabsList>
           <TabsTrigger value="gpt-providers">GPT Providers</TabsTrigger>
-          <TabsTrigger value="financial-sources">Financial Data Sources</TabsTrigger>
+          <TabsTrigger value="news-sources">News Sources</TabsTrigger>
           <TabsTrigger value="content-filtering">Content Filtering</TabsTrigger>
         </TabsList>
 
@@ -281,47 +312,50 @@ export function AdminSystemSettings() {
           })}
         </TabsContent>
 
-        <TabsContent value="financial-sources" className="space-y-6">
+        <TabsContent value="news-sources" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Financial Data Sources</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                Configure the order and settings for financial data retrieval
-              </p>
+              <CardTitle>Finance News Sources</CardTitle>
+              <p className="text-sm text-muted-foreground">Enter up to 5 domains (one per line). These will be used first before falling back.</p>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-4 border rounded-lg">
-                  <div>
-                    <h4 className="font-medium">Yahoo Finance</h4>
-                    <p className="text-sm text-muted-foreground">Primary source for stock data, news, and market information</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="default">Priority 1</Badge>
-                    <Switch defaultChecked />
-                  </div>
+              <div className="space-y-2">
+                <Label htmlFor="news-domains">Allowed Sites (max 5)</Label>
+                <Textarea
+                  id="news-domains"
+                  className="min-h-[120px]"
+                  value={newsDomains}
+                  onChange={(e) => setNewsDomains(e.target.value)}
+                  placeholder={"finance.yahoo.com\nbusinessinsider.com\nmoneyweek.com\ninvesting.com"}
+                />
+                <p className="text-xs text-muted-foreground">Examples: finance.yahoo.com, businessinsider.com</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="region-pref">Region Preference</Label>
+                  <select
+                    id="region-pref"
+                    value={regionPref}
+                    onChange={(e) => setRegionPref(e.target.value as 'US' | 'EU' | 'WW')}
+                    className="w-full px-3 py-2 border border-input bg-background rounded-md text-sm"
+                  >
+                    <option value="US">US</option>
+                    <option value="EU">EU</option>
+                    <option value="WW">Worldwide</option>
+                  </select>
                 </div>
 
-                <div className="flex items-center justify-between p-4 border rounded-lg">
-                  <div>
-                    <h4 className="font-medium">Google Finance</h4>
-                    <p className="text-sm text-muted-foreground">Secondary source for market data and financial news</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary">Priority 2</Badge>
-                    <Switch defaultChecked />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between p-4 border rounded-lg">
-                  <div>
-                    <h4 className="font-medium">Financial News APIs</h4>
-                    <p className="text-sm text-muted-foreground">Additional financial news and analysis sources</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">Priority 3</Badge>
-                    <Switch />
-                  </div>
+                <div className="space-y-2">
+                  <Label htmlFor="time-window">Time Window (days)</Label>
+                  <Input
+                    id="time-window"
+                    type="number"
+                    min="1"
+                    max="365"
+                    value={timeWindow}
+                    onChange={(e) => setTimeWindow(parseInt(e.target.value) || 30)}
+                  />
                 </div>
               </div>
             </CardContent>

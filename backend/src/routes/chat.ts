@@ -4,8 +4,61 @@ import { chatService } from '../services/chatService';
 import { authenticateToken } from '../middleware/authJWT';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { adminService } from '../services/adminService';
+import { newsService } from '../services/newsService';
 
 const router = Router();
+// POST /api/chat/news-answer - News grounded JSON answer per contract
+router.post('/news-answer',
+  body('user_query').isString().trim().isLength({ min: 5, max: 5000 }),
+  body('admin_allowed_sites').optional().isArray({ max: 5 }),
+  body('region_preference').optional().isIn(['US', 'EU', 'WW']),
+  body('time_window_days').optional().isInt({ min: 1, max: 365 }),
+  handleValidationErrors,
+  asyncHandler(async (req: Request, res: Response) => {
+    const startTime = Date.now();
+
+    try {
+      const userId = req.user!.userId;
+      const { user_query, admin_allowed_sites, region_preference, time_window_days } = req.body as {
+        user_query: string;
+        admin_allowed_sites?: string[];
+        region_preference?: 'US' | 'EU' | 'WW';
+        time_window_days?: number;
+      };
+
+      const result = await newsService.answerFromNews(user_query, {
+        admin_allowed_sites,
+        region_preference,
+        time_window_days
+      });
+
+      await adminService.logUsage(
+        '/api/chat/news-answer',
+        'POST',
+        200,
+        Date.now() - startTime,
+        userId,
+        req.ip,
+        req.get('User-Agent')
+      );
+
+      res.json(result);
+    } catch (error: any) {
+      await adminService.logUsage(
+        '/api/chat/news-answer',
+        'POST',
+        error.statusCode || 500,
+        Date.now() - startTime,
+        req.user?.userId,
+        req.ip,
+        req.get('User-Agent'),
+        error.message
+      );
+      throw error;
+    }
+  })
+);
+
 
 // All chat routes require authentication
 router.use(authenticateToken);
