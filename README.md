@@ -66,7 +66,7 @@ git clone https://github.com/sapradeep123/FAQFinance.git
 cd Trae
 ```
 
-### 2. Backend Setup
+### 2. Backend Setup (PostgreSQL)
 
 ```bash
 cd backend
@@ -78,35 +78,19 @@ Copy the environment file and configure:
 cp .env.example .env
 ```
 
-Edit `.env` file with your configuration:
-```env
-# Database
-USE_SQLITE=true
-DATABASE_URL=./data/database.sqlite
-
-# Server
-PORT=5000
-NODE_ENV=development
-
-# Authentication
-JWT_SECRET=your-super-secret-jwt-key-here
-JWT_EXPIRES_IN=7d
-
-# Admin Account
-ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD=admin123
-
-# API Keys (Optional - for full functionality)
-YAHOO_FINANCE_API_KEY=your-yahoo-finance-key
-GOOGLE_API_KEY=your-google-api-key
+Set environment in PowerShell for this session:
+```powershell
+$env:DATABASE_URL="postgres://postgres:postgres%40123@localhost:5432/faq_finance"
+$env:PORT=5000
 ```
 
-Start the backend server:
-```bash
+Run migrations and start the server:
+```powershell
+npm run pg:migrate
 npm run dev
 ```
 
-The backend will be available at `http://localhost:8080`
+Health check: http://localhost:5000/api/health
 
 ### 3. Frontend Setup
 
@@ -120,10 +104,9 @@ Copy the environment file:
 cp .env.example .env.local
 ```
 
-Edit `.env.local` file:
+Create `.env` (or `.env.local`) and set API base:
 ```env
-VITE_API_URL=http://localhost:8080
-VITE_APP_NAME=Trae AI Financial Assistant
+VITE_API_BASE_URL=http://localhost:5000/api
 ```
 
 Start the frontend development server:
@@ -131,7 +114,7 @@ Start the frontend development server:
 npm run dev
 ```
 
-The frontend will be available at `http://localhost:5173`
+The frontend will be available at `http://localhost:5173` (or 5174 if 5173 is busy)
 
 ## 🔑 Default Login Credentials
 
@@ -244,8 +227,8 @@ npm run lint         # Run ESLint
    ```
 
 2. **Database connection issues**:
-   - Ensure SQLite file permissions are correct
-   - Check `DATABASE_URL` in backend `.env`
+   - Ensure PostgreSQL is running and `faq_finance` DB exists
+   - Verify `DATABASE_URL` is set (watch for `%40` in password)
 
 3. **API key errors**:
    - Yahoo Finance and Google API keys are optional for development
