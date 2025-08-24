@@ -1,4 +1,4 @@
-import { pool } from '../db/pool';
+import { query } from '../config/database';
 import { createError } from '../middleware/errorHandler';
 import fetch from 'node-fetch';
 
@@ -42,7 +42,7 @@ export interface ProviderRating {
 
 class LLMService {
   private async getActiveProviders(): Promise<GptProvider[]> {
-    const result = await pool.query(
+    const result = await query(
       `SELECT id, provider, api_key, model, is_active, max_tokens, temperature, created_at, updated_at
        FROM gpt_configs 
        WHERE is_active = true
@@ -479,7 +479,7 @@ class LLMService {
 
   private async logProviderUsage(userId: string, response: ProviderResponse): Promise<void> {
     try {
-      await pool.query(
+      await query(
         `INSERT INTO usage_logs (
           user_id, action, resource, method, status_code, duration_ms,
           api_provider, tokens_used, cost_cents, error_message, metadata
@@ -515,7 +515,7 @@ class LLMService {
     avg_confidence: number;
     total_cost_cents: number;
   }[]> {
-    const result = await pool.query(
+    const result = await query(
       `SELECT 
         api_provider as provider,
         COUNT(*) as total_calls,

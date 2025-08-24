@@ -1,4 +1,4 @@
-import { pool } from '../db/pool';
+import { query, transaction } from '../config/database';
 import { createError } from '../middleware/errorHandler';
 import { marketDataService, MarketSnapshot } from './marketDataService';
 
@@ -99,10 +99,10 @@ export interface UpdatePositionData {
 
 class PortfolioService {
   async createPortfolio(userId: string, data: CreatePortfolioData): Promise<Portfolio> {
-    const result = await pool.query(
+    const result = await query(
       `INSERT INTO portfolios (
         user_id, name, description, type, currency, cash_balance_cents, is_active
-      ) VALUES ($1, $2, $3, $4, $5, $6, true)
+      ) VALUES (?, ?, ?, ?, ?, ?, true)
       RETURNING id, user_id, name, description, type, currency, total_value_cents, 
                 total_cost_cents, unrealized_pnl_cents, realized_pnl_cents, 
                 cash_balance_cents, is_active, created_at, updated_at, metadata`,
@@ -120,12 +120,12 @@ class PortfolioService {
   }
 
   async getUserPortfolios(userId: string, includeInactive: boolean = false): Promise<Portfolio[]> {
-    let whereClause = 'WHERE user_id = $1';
+    let whereClause = 'WHERE user_id = ?';
     if (!includeInactive) {
       whereClause += ' AND is_active = true';
     }
 
-    const result = await pool.query(
+    const result = await query(
       `SELECT id, user_id, name, description, type, currency, total_value_cents, 
               total_cost_cents, unrealized_pnl_cents, realized_pnl_cents, 
               cash_balance_cents, is_active, created_at, updated_at, metadata
@@ -139,12 +139,12 @@ class PortfolioService {
   }
 
   async getPortfolio(portfolioId: string, userId: string): Promise<Portfolio | null> {
-    const result = await pool.query(
+    const result = await query(
       `SELECT id, user_id, name, description, type, currency, total_value_cents, 
               total_cost_cents, unrealized_pnl_cents, realized_pnl_cents, 
               cash_balance_cents, is_active, created_at, updated_at, metadata
        FROM portfolios 
-       WHERE id = $1 AND user_id = $2`,
+       WHERE id = ? AND user_id = ?`,
       [portfolioId, userId]
     );
 
@@ -161,37 +161,37 @@ class PortfolioService {
     let paramIndex = 1;
 
     if (updates.name !== undefined) {
-      setClause.push(`name = $${paramIndex++}`);
+      setClause.push(`name = ?`);
       values.push(updates.name);
     }
     if (updates.description !== undefined) {
-      setClause.push(`description = $${paramIndex++}`);
+      setClause.push(`description = ?`);
       values.push(updates.description);
     }
     if (updates.type !== undefined) {
-      setClause.push(`type = $${paramIndex++}`);
+      setClause.push(`type = ?`);
       values.push(updates.type);
     }
     if (updates.currency !== undefined) {
-      setClause.push(`currency = $${paramIndex++}`);
+      setClause.push(`currency = ?`);
       values.push(updates.currency);
     }
     if (updates.cash_balance_cents !== undefined) {
-      setClause.push(`cash_balance_cents = $${paramIndex++}`);
+      setClause.push(`cash_balance_cents = ?`);
       values.push(updates.cash_balance_cents);
     }
 
     if (setClause.length === 0) {
-      throw createError(400, 'No valid updates provided');
+      throw createError('No valid updates provided', 400);
     }
 
     setClause.push(`updated_at = CURRENT_TIMESTAMP`);
     values.push(portfolioId, userId);
 
-    const result = await pool.query(
+    const result = await query(
       `UPDATE portfolios 
        SET ${setClause.join(', ')}
-       WHERE id = $${paramIndex++} AND user_id = $${paramIndex++}
+       WHERE id = ? AND user_id = ?
        RETURNING id, user_id, name, description, type, currency, total_value_cents, 
                  total_cost_cents, unrealized_pnl_cents, realized_pnl_cents, 
                  cash_balance_cents, is_active, created_at, updated_at, metadata`,
@@ -199,17 +199,17 @@ class PortfolioService {
     );
 
     if (result.rows.length === 0) {
-      throw createError(404, 'Portfolio not found');
+      throw createError('Portfolio not found', 404);
     }
 
     return result.rows[0];
   }
 
   async deletePortfolio(portfolioId: string, userId: string): Promise<void> {
-    const result = await pool.query(
+    const result = await query(
       `UPDATE portfolios 
        SET is_active = false, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1 AND user_id = $2`,
+       WHERE id = ? AND user_id = ?`,
       [portfolioId, userId]
     );
 
@@ -223,20 +223,16 @@ class PortfolioService {
     userId: string,
     positionData: AddPositionData
   ): Promise<Position> {
-    const client = await pool.connect();
-    
-    try {
-      await client.query('BEGIN');
-
+    return await transaction(async (queryFn) => {
       // Verify portfolio ownership
       const portfolio = await this.getPortfolio(portfolioId, userId);
       if (!portfolio) {
-        throw createError(404, 'Portfolio not found');
+        throw createError('Portfolio not found', 404);
       }
 
       // Check if position already exists
-      const existingResult = await client.query(
-        'SELECT id, quantity, avg_cost_cents FROM positions WHERE portfolio_id = $1 AND ticker = $2',
+      const existingResult = await queryFn(
+        'SELECT id, quantity, avg_cost_cents FROM positions WHERE portfolio_id = ? AND ticker = ?',
         [portfolioId, positionData.ticker.toUpperCase()]
       );
 
@@ -250,10 +246,10 @@ class PortfolioService {
                          (positionData.quantity * positionData.avg_cost_cents);
         const newAvgCost = Math.round(totalCost / totalQuantity);
 
-        const updateResult = await client.query(
+        const updateResult = await queryFn(
           `UPDATE positions 
-           SET quantity = $1, avg_cost_cents = $2, last_updated = CURRENT_TIMESTAMP
-           WHERE id = $3
+           SET quantity = ?, avg_cost_cents = ?, last_updated = CURRENT_TIMESTAMP
+           WHERE id = ?
            RETURNING id, portfolio_id, ticker, company_name, quantity, avg_cost_cents, 
                      current_price_cents, market_value_cents, unrealized_pnl_cents, 
                      unrealized_pnl_percentage, last_updated, created_at, metadata`,
@@ -263,10 +259,10 @@ class PortfolioService {
         position = updateResult.rows[0];
       } else {
         // Create new position
-        const insertResult = await client.query(
+        const insertResult = await queryFn(
           `INSERT INTO positions (
             portfolio_id, ticker, company_name, quantity, avg_cost_cents
-          ) VALUES ($1, $2, $3, $4, $5)
+          ) VALUES (?, ?, ?, ?, ?)
           RETURNING id, portfolio_id, ticker, company_name, quantity, avg_cost_cents, 
                     current_price_cents, market_value_cents, unrealized_pnl_cents, 
                     unrealized_pnl_percentage, last_updated, created_at, metadata`,
@@ -288,24 +284,17 @@ class PortfolioService {
       // Recalculate portfolio totals
       await this.recalculatePortfolioTotals(portfolioId);
 
-      await client.query('COMMIT');
-
       // Get updated position
-      const finalResult = await pool.query(
+      const finalResult = await queryFn(
         `SELECT id, portfolio_id, ticker, company_name, quantity, avg_cost_cents, 
                 current_price_cents, market_value_cents, unrealized_pnl_cents, 
                 unrealized_pnl_percentage, last_updated, created_at, metadata
-         FROM positions WHERE id = $1`,
+         FROM positions WHERE id = ?`,
         [position.id]
       );
 
       return finalResult.rows[0];
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
   }
 
   async getPortfolioPositions(portfolioId: string, userId: string): Promise<Position[]> {
@@ -315,12 +304,12 @@ class PortfolioService {
       throw createError(404, 'Portfolio not found');
     }
 
-    const result = await pool.query(
+    const result = await query(
       `SELECT id, portfolio_id, ticker, company_name, quantity, avg_cost_cents, 
               current_price_cents, market_value_cents, unrealized_pnl_cents, 
               unrealized_pnl_percentage, last_updated, created_at, metadata
        FROM positions 
-       WHERE portfolio_id = $1 AND quantity > 0
+       WHERE portfolio_id = ? AND quantity > 0
        ORDER BY market_value_cents DESC`,
       [portfolioId]
     );
@@ -343,7 +332,7 @@ class PortfolioService {
         `SELECT p.id, p.portfolio_id, p.quantity, p.avg_cost_cents
          FROM positions p
          JOIN portfolios pf ON p.portfolio_id = pf.id
-         WHERE p.id = $1 AND pf.user_id = $2`,
+         WHERE p.id = ? AND pf.user_id = ?`,
         [positionId, userId]
       );
 
@@ -358,11 +347,11 @@ class PortfolioService {
       let paramIndex = 1;
 
       if (updates.quantity !== undefined) {
-        setClause.push(`quantity = $${paramIndex++}`);
+        setClause.push(`quantity = ?`);
         values.push(updates.quantity);
       }
       if (updates.avg_cost_cents !== undefined) {
-        setClause.push(`avg_cost_cents = $${paramIndex++}`);
+        setClause.push(`avg_cost_cents = ?`);
         values.push(updates.avg_cost_cents);
       }
 
@@ -376,7 +365,7 @@ class PortfolioService {
       const updateResult = await client.query(
         `UPDATE positions 
          SET ${setClause.join(', ')}
-         WHERE id = $${paramIndex++}
+         WHERE id = ?
          RETURNING id, portfolio_id, ticker, company_name, quantity, avg_cost_cents, 
                    current_price_cents, market_value_cents, unrealized_pnl_cents, 
                    unrealized_pnl_percentage, last_updated, created_at, metadata`,
@@ -398,7 +387,7 @@ class PortfolioService {
         `SELECT id, portfolio_id, ticker, company_name, quantity, avg_cost_cents, 
                 current_price_cents, market_value_cents, unrealized_pnl_cents, 
                 unrealized_pnl_percentage, last_updated, created_at, metadata
-         FROM positions WHERE id = $1`,
+         FROM positions WHERE id = ?`,
         [updatedPosition.id]
       );
 
@@ -422,7 +411,7 @@ class PortfolioService {
         `SELECT p.portfolio_id
          FROM positions p
          JOIN portfolios pf ON p.portfolio_id = pf.id
-         WHERE p.id = $1 AND pf.user_id = $2`,
+         WHERE p.id = ? AND pf.user_id = ?`,
         [positionId, userId]
       );
 
@@ -433,7 +422,7 @@ class PortfolioService {
       const portfolioId = positionResult.rows[0].portfolio_id;
 
       // Delete the position
-      await client.query('DELETE FROM positions WHERE id = $1', [positionId]);
+      await client.query('DELETE FROM positions WHERE id = ?', [positionId]);
 
       // Recalculate portfolio totals
       await this.recalculatePortfolioTotals(portfolioId);
@@ -491,12 +480,12 @@ class PortfolioService {
 
         await client.query(
           `UPDATE positions 
-           SET current_price_cents = $1,
-               market_value_cents = $2,
-               unrealized_pnl_cents = $3,
-               unrealized_pnl_percentage = $4,
+           SET current_price_cents = ?,
+               market_value_cents = ?,
+               unrealized_pnl_cents = ?,
+               unrealized_pnl_percentage = ?,
                last_updated = CURRENT_TIMESTAMP
-           WHERE id = $5`,
+           WHERE id = ?`,
           [
             currentPriceCents,
             marketValueCents,
@@ -523,7 +512,7 @@ class PortfolioService {
         COALESCE(SUM(quantity * avg_cost_cents), 0) as total_cost,
         COALESCE(SUM(unrealized_pnl_cents), 0) as total_unrealized_pnl
        FROM positions 
-       WHERE portfolio_id = $1 AND quantity > 0`,
+       WHERE portfolio_id = ? AND quantity > 0`,
       [portfolioId]
     );
 
@@ -531,11 +520,11 @@ class PortfolioService {
 
     await pool.query(
       `UPDATE portfolios 
-       SET total_value_cents = $1 + cash_balance_cents,
-           total_cost_cents = $2,
-           unrealized_pnl_cents = $3,
+       SET total_value_cents = ?,
+           total_cost_cents = ?,
+           unrealized_pnl_cents = ?,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $4`,
+       WHERE id = ?`,
       [
         parseInt(totals.total_market_value),
         parseInt(totals.total_cost),
@@ -555,7 +544,7 @@ class PortfolioService {
       `SELECT p.id
        FROM positions p
        JOIN portfolios pf ON p.portfolio_id = pf.id
-       WHERE p.id = $1 AND pf.user_id = $2`,
+       WHERE p.id = ? AND pf.user_id = ?`,
       [positionId, userId]
     );
 
@@ -567,7 +556,7 @@ class PortfolioService {
       `SELECT id, position_id, date, quantity, price_cents, market_value_cents, 
               unrealized_pnl_cents, created_at
        FROM position_history 
-       WHERE position_id = $1 AND date >= CURRENT_DATE - INTERVAL '${days} days'
+       WHERE position_id = ? AND date >= CURRENT_DATE - INTERVAL '${days} days'
        ORDER BY date DESC`,
       [positionId]
     );
@@ -592,7 +581,7 @@ class PortfolioService {
               volatility_30d, sharpe_ratio, max_drawdown_percentage, 
               sector_allocation, top_holdings, created_at
        FROM portfolio_analytics 
-       WHERE portfolio_id = $1 AND date >= CURRENT_DATE - INTERVAL '${days} days'
+       WHERE portfolio_id = ? AND date >= CURRENT_DATE - INTERVAL '${days} days'
        ORDER BY date DESC`,
       [portfolioId]
     );
@@ -614,7 +603,7 @@ class PortfolioService {
 
       // Get all positions for this portfolio
       const positionsResult = await client.query(
-        'SELECT id FROM positions WHERE portfolio_id = $1 AND quantity > 0',
+        'SELECT id FROM positions WHERE portfolio_id = ? AND quantity > 0',
         [portfolioId]
       );
 
@@ -656,7 +645,7 @@ class PortfolioService {
         COUNT(DISTINCT p.id) as total_positions
       FROM portfolios pf
       LEFT JOIN positions p ON pf.id = p.portfolio_id AND p.quantity > 0
-      WHERE pf.user_id = $1 AND pf.is_active = true`,
+      WHERE pf.user_id = ? AND pf.is_active = true`,
       [userId]
     );
 
@@ -667,7 +656,7 @@ class PortfolioService {
       `SELECT ticker, unrealized_pnl_percentage
        FROM positions p
        JOIN portfolios pf ON p.portfolio_id = pf.id
-       WHERE pf.user_id = $1 AND pf.is_active = true AND p.quantity > 0
+       WHERE pf.user_id = ? AND pf.is_active = true AND p.quantity > 0
        ORDER BY unrealized_pnl_percentage DESC
        LIMIT 10`,
       [userId]
@@ -720,7 +709,7 @@ class PortfolioService {
       const uploadResult = await client.query(
         `INSERT INTO portfolio_uploads 
          (portfolio_id, filename, file_size, file_type, upload_status, created_at)
-         VALUES ($1, $2, $3, $4, 'processing', CURRENT_TIMESTAMP)
+         VALUES (?, ?, ?, ?, 'processing', CURRENT_TIMESTAMP)
          RETURNING id`,
         [portfolioId, fileInfo.filename, fileInfo.fileSize, fileInfo.mimeType]
       );
@@ -749,7 +738,7 @@ class PortfolioService {
 
           // Check if position already exists
           const existingResult = await client.query(
-            'SELECT id, quantity, avg_cost_cents FROM positions WHERE portfolio_id = $1 AND ticker = $2',
+            'SELECT id, quantity, avg_cost_cents FROM positions WHERE portfolio_id = ? AND ticker = ?',
             [portfolioId, ticker]
           );
 
@@ -762,8 +751,8 @@ class PortfolioService {
 
             await client.query(
               `UPDATE positions 
-               SET quantity = $1, avg_cost_cents = $2, updated_at = CURRENT_TIMESTAMP
-               WHERE id = $3`,
+               SET quantity = ?, avg_cost_cents = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?`,
               [totalQuantity, newAvgCost, existing.id]
             );
           } else {
@@ -772,7 +761,7 @@ class PortfolioService {
               `INSERT INTO positions 
                (portfolio_id, ticker, company_name, quantity, avg_cost_cents, 
                 sector, exchange, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
               [
                 portfolioId,
                 ticker,
@@ -796,9 +785,9 @@ class PortfolioService {
       const finalStatus = errors.length > 0 ? 'completed_with_errors' : 'completed';
       await client.query(
         `UPDATE portfolio_uploads 
-         SET upload_status = $1, processed_at = CURRENT_TIMESTAMP,
-             positions_uploaded = $2, positions_skipped = $3, error_details = $4
-         WHERE id = $5`,
+         SET upload_status = ?, processed_at = CURRENT_TIMESTAMP,
+             positions_uploaded = ?, positions_skipped = ?, error_details = ?
+         WHERE id = ?`,
         [finalStatus, uploadedCount, skippedCount, JSON.stringify(errors), uploadId]
       );
 
@@ -830,7 +819,7 @@ class PortfolioService {
         COALESCE(SUM(quantity * avg_cost_cents), 0) as total_cost_cents,
         COUNT(*) as position_count
        FROM positions 
-       WHERE portfolio_id = $1 AND quantity > 0`,
+       WHERE portfolio_id = ? AND quantity > 0`,
       [portfolioId]
     );
 
@@ -839,8 +828,8 @@ class PortfolioService {
     // Update portfolio totals (we'll update market values when we fetch real-time data)
     await queryClient.query(
       `UPDATE portfolios 
-       SET total_cost_cents = $1, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2`,
+       SET total_cost_cents = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
       [total_cost_cents, portfolioId]
     );
   }

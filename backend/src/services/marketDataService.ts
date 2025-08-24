@@ -1,4 +1,4 @@
-import { pool } from '../db/pool';
+import { query } from '../config/database';
 import { createError } from '../middleware/errorHandler';
 import fetch from 'node-fetch';
 
@@ -44,7 +44,7 @@ class MarketDataService {
   private readonly STALE_THRESHOLD_MINUTES = 15; // Mark data as stale after 15 minutes
 
   private async getActiveProviders(): Promise<MarketDataProvider[]> {
-    const result = await pool.query(
+    const result = await query(
       `SELECT provider, priority, timeout_ms, base_url, status
        FROM api_configs 
        WHERE status = 'ACTIVE'
@@ -56,13 +56,13 @@ class MarketDataService {
   }
 
   private async getCachedSnapshot(ticker: string): Promise<MarketSnapshot | null> {
-    const result = await pool.query(
+    const result = await query(
       `SELECT ticker, price, change_amount, change_percent, volume, market_cap,
               pe_ratio, dividend_yield, fifty_two_week_high, fifty_two_week_low,
               currency, exchange, last_updated, provider, metadata
        FROM market_data_cache 
-       WHERE ticker = $1 
-         AND last_updated > CURRENT_TIMESTAMP - INTERVAL '${this.CACHE_DURATION_MINUTES} minutes'
+       WHERE ticker = ? 
+         AND last_updated > datetime('now', '-${this.CACHE_DURATION_MINUTES} minutes')
        ORDER BY last_updated DESC 
        LIMIT 1`,
       [ticker.toUpperCase()]
@@ -94,12 +94,12 @@ class MarketDataService {
 
   private async cacheSnapshot(snapshot: MarketSnapshot): Promise<void> {
     try {
-      await pool.query(
+      await query(
         `INSERT INTO market_data_cache (
           ticker, price, change_amount, change_percent, volume, market_cap,
           pe_ratio, dividend_yield, fifty_two_week_high, fifty_two_week_low,
-          currency, exchange, provider, metadata
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          currency, exchange, provider, metadata, last_updated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT (ticker) DO UPDATE SET
           price = EXCLUDED.price,
           change_amount = EXCLUDED.change_amount,
@@ -575,9 +575,9 @@ class MarketDataService {
   }
 
   async cleanupStaleData(): Promise<number> {
-    const result = await pool.query(
+    const result = await query(
       `DELETE FROM market_data_cache 
-       WHERE last_updated < CURRENT_TIMESTAMP - INTERVAL '${this.STALE_THRESHOLD_MINUTES} minutes'`
+       WHERE last_updated < datetime('now', '-${this.STALE_THRESHOLD_MINUTES} minutes')`
     );
     
     return result.rowCount || 0;

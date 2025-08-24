@@ -14,6 +14,7 @@ import chatRoutes from './routes/chat';
 import portfolioRoutes from './routes/portfolio';
 import adminRoutes from './routes/admin';
 import faqRoutes from './routes/faq';
+import faqCategoryRoutes from './routes/faqCategories';
 import financialDataRoutes from './routes/financialData';
 
 const app = express();
@@ -42,24 +43,23 @@ app.use(helmet({
 // CORS configuration
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
+    // Always allow requests with no Origin (mobile apps, curl, same-origin)
     if (!origin) return callback(null, true);
-    
+
+    // In development, allow any origin to simplify local/network testing
+    if (config.NODE_ENV !== 'production') {
+      return callback(null, true);
+    }
+
     const allowedOrigins = [
       'http://localhost:3000',
       'http://localhost:5173',
       'http://127.0.0.1:3000',
-      'http://127.0.0.1:5173'
-    ];
-    
-    if (config.NODE_ENV === 'production') {
-      // Add production origins here
-      allowedOrigins.push(
-        // Add your production domain(s)
-      );
-    }
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
+      'http://127.0.0.1:5173',
+      config.CORS_ORIGIN
+    ].filter(Boolean) as string[];
+
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
@@ -83,7 +83,7 @@ const limiter = rateLimit({
   legacyHeaders: false,
   // Custom key generator to use user ID if authenticated
   keyGenerator: (req) => {
-    return req.user?.userId || req.ip;
+    return (req as any).user?.userId || req.ip;
   },
   // Skip rate limiting for certain endpoints in development
   skip: (req) => {
@@ -110,47 +110,40 @@ if (config.NODE_ENV === 'production') {
   app.use(morgan('dev'));
 }
 
-// Custom logging middleware for API usage
-app.use(async (req, res, next) => {
-  const startTime = Date.now();
-  
-  // Override res.end to capture response details
-  const originalEnd = res.end;
-  res.end = function(chunk, encoding) {
-    res.end = originalEnd;
-    res.end(chunk, encoding);
-    
-    // Log API usage asynchronously (don't wait for it)
-    setImmediate(async () => {
-      try {
-        const responseTime = Date.now() - startTime;
-        const userId = (req as any).user?.userId;
-        const userAgent = req.get('User-Agent');
-        const endpoint = req.path;
-        const method = req.method;
-        const statusCode = res.statusCode;
-        const ip = req.ip;
-        
-        // Only log API endpoints, skip static files and health checks
-        if (endpoint.startsWith('/api/') && !endpoint.startsWith('/api/health')) {
-          await adminService.logUsage(
-            endpoint,
-            method,
-            statusCode,
-            responseTime,
-            userId,
-            ip,
-            userAgent
-          );
-        }
-      } catch (error) {
-        console.error('Error logging API usage:', error);
-      }
-    });
-  };
-  
-  next();
-});
+// API usage logging middleware temporarily disabled to stabilize SQLite migration
+// app.use(async (req, res, next) => {
+//   const startTime = Date.now();
+//   const originalEnd = res.end;
+//   res.end = function(chunk, encoding) {
+//     res.end = originalEnd;
+//     res.end(chunk, encoding);
+//     setImmediate(async () => {
+//       try {
+//         const responseTime = Date.now() - startTime;
+//         const userId = (req as any).user?.userId;
+//         const userAgent = req.get('User-Agent');
+//         const endpoint = req.path;
+//         const method = req.method;
+//         const statusCode = res.statusCode;
+//         const ip = req.ip;
+//         if (endpoint.startsWith('/api/') && !endpoint.startsWith('/api/health')) {
+//           await adminService.logUsage(
+//             endpoint,
+//             method,
+//             statusCode,
+//             responseTime,
+//             userId,
+//             ip,
+//             userAgent
+//           );
+//         }
+//       } catch (error) {
+//         console.error('Error logging API usage:', error);
+//       }
+//     });
+//   };
+//   next();
+// });
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -169,6 +162,7 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/faq', faqRoutes);
+app.use('/api/faq/categories', faqCategoryRoutes);
 app.use('/api/financial-data', financialDataRoutes);
 
 // API documentation endpoint

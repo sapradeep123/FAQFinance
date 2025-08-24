@@ -88,7 +88,7 @@ echo ========================================
 echo.
 echo Starting backend server...
 cd /d "%~dp0backend"
-start "Trae Backend" cmd /k "npm run dev"
+start "Trae Backend" cmd /k "set PORT=5000 && npm run dev"
 
 REM Wait a moment for backend to start
 timeout /t 3 /nobreak >nul

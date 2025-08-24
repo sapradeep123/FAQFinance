@@ -1,7 +1,7 @@
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { query } from '../config/database';
-import { config } from '../config/env';
+import { config } from '../config/config';
 import { createError } from '../middleware/errorHandler';
 
 export interface User {
@@ -62,17 +62,17 @@ class AuthService {
       role: user.role
     };
 
-    const accessToken = jwt.sign(payload, config.jwt.secret, {
-      expiresIn: config.jwt.expiresIn,
+    const accessToken = jwt.sign(payload, config.JWT_SECRET as jwt.Secret, {
+      expiresIn: config.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'],
       issuer: 'finance-app',
       audience: 'finance-app-users'
     });
 
     const refreshToken = jwt.sign(
       { userId: user.id, type: 'refresh' },
-      config.jwt.refreshSecret,
+      config.JWT_REFRESH_SECRET as jwt.Secret,
       {
-        expiresIn: config.jwt.refreshExpiresIn,
+        expiresIn: config.JWT_REFRESH_EXPIRES_IN as jwt.SignOptions['expiresIn'],
         issuer: 'finance-app',
         audience: 'finance-app-users'
       }
@@ -83,7 +83,7 @@ class AuthService {
 
   async verifyRefreshToken(token: string): Promise<{ userId: string }> {
     try {
-      const decoded = jwt.verify(token, config.jwt.refreshSecret) as any;
+      const decoded = jwt.verify(token, config.JWT_REFRESH_SECRET) as any;
       if (decoded.type !== 'refresh') {
         throw createError('Invalid token type', 401);
       }
@@ -97,7 +97,7 @@ class AuthService {
     try {
       // Check if user already exists
       const existingUser = await query(
-        'SELECT id FROM users WHERE email = $1 OR username = $2',
+        'SELECT id FROM users WHERE email = ? OR username = ?',
         [userData.email, userData.username]
       );
 
@@ -108,11 +108,10 @@ class AuthService {
       // Hash password
       const hashedPassword = await this.hashPassword(userData.password);
 
-      // Insert new user
-      const result = await query(
+      // Insert new user (we'll fetch it back by email)
+      await query(
         `INSERT INTO users (email, username, password_hash, region, currency, role, status)
-         VALUES ($1, $2, $3, $4, $5, 'USER', 'ACTIVE')
-         RETURNING id, email, username, role, status, region, currency, theme, created_at, updated_at`,
+         VALUES (?, ?, ?, ?, ?, 'USER', 'ACTIVE')`,
         [
           userData.email,
           userData.username,
@@ -122,7 +121,11 @@ class AuthService {
         ]
       );
 
-      return result.rows[0];
+      const created = await this.getUserByEmail(userData.email);
+      if (!created) {
+        throw createError('Failed to create user', 500);
+      }
+      return created;
     } catch (error) {
       throw error;
     }
@@ -135,7 +138,7 @@ class AuthService {
         `SELECT id, email, username, password_hash, role, status, region, currency, theme, 
                 created_at, updated_at, last_login
          FROM users 
-         WHERE email = $1`,
+         WHERE email = ?`,
         [credentials.email]
       );
 
@@ -158,7 +161,7 @@ class AuthService {
 
       // Update last login
       await query(
-        'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = $1',
+        'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?',
         [user.id]
       );
 
@@ -180,7 +183,7 @@ class AuthService {
       `SELECT id, email, username, role, status, region, currency, theme, 
               created_at, updated_at, last_login
        FROM users 
-       WHERE id = $1`,
+       WHERE id = ?`,
       [userId]
     );
 
@@ -192,7 +195,7 @@ class AuthService {
       `SELECT id, email, username, role, status, region, currency, theme, 
               created_at, updated_at, last_login
        FROM users 
-       WHERE email = $1`,
+       WHERE email = ?`,
       [email]
     );
 
@@ -204,7 +207,7 @@ class AuthService {
       // Check if username is being changed and if it's already taken
       if (profileData.username) {
         const existingUser = await query(
-          'SELECT id FROM users WHERE username = $1 AND id != $2',
+          'SELECT id FROM users WHERE username = ? AND id != ?',
           [profileData.username, userId]
         );
 
@@ -245,8 +248,7 @@ class AuthService {
       const result = await query(
         `UPDATE users 
          SET ${updateFields.join(', ')}
-         WHERE id = $${paramIndex}
-         RETURNING id, email, username, role, status, region, currency, theme, created_at, updated_at, last_login`,
+         WHERE id = ?`,
         updateValues
       );
 
@@ -264,12 +266,12 @@ class AuthService {
     try {
       // Get current password hash
       const result = await query(
-        'SELECT password_hash FROM users WHERE id = $1',
+        'SELECT password_hash FROM users WHERE id = ?',
         [userId]
       );
 
       if (result.rows.length === 0) {
-        throw createError(404, 'User not found');
+        throw createError('User not found', 404);
       }
 
       // Verify current password
@@ -287,7 +289,7 @@ class AuthService {
 
       // Update password
       await query(
-        'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        'UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
         [newHashedPassword, userId]
       );
     } catch (error) {
@@ -300,7 +302,7 @@ class AuthService {
     
     const user = await this.getUserById(userId);
     if (!user) {
-      throw createError(404, 'User not found');
+      throw createError('User not found', 404);
     }
 
     if (user.status !== 'ACTIVE') {
@@ -313,23 +315,24 @@ class AuthService {
   async createSession(userId: string, sessionData: { ip_address?: string; user_agent?: string }): Promise<string> {
     const sessionId = jwt.sign(
       { userId, type: 'session', timestamp: Date.now() },
-      config.jwt.secret,
+      config.JWT_SECRET as jwt.Secret,
       { expiresIn: '24h' }
     );
 
     await query(
       `INSERT INTO user_sessions (id, user_id, ip_address, user_agent, expires_at)
-       VALUES ($1, $2, $3, $4, $5)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET
-         last_activity = CURRENT_TIMESTAMP,
+         last_activity = NOW(),
          ip_address = EXCLUDED.ip_address,
-         user_agent = EXCLUDED.user_agent`,
+         user_agent = EXCLUDED.user_agent,
+         updated_at = NOW()`,
       [
         sessionId,
         userId,
         sessionData.ip_address,
         sessionData.user_agent,
-        new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours from now
+        new Date(Date.now() + 24 * 60 * 60 * 1000)
       ]
     );
 
@@ -339,14 +342,14 @@ class AuthService {
   async validateSession(sessionId: string): Promise<boolean> {
     const result = await query(
       `SELECT id FROM user_sessions 
-       WHERE id = $1 AND expires_at > CURRENT_TIMESTAMP AND is_active = true`,
+       WHERE id = ? AND expires_at > CURRENT_TIMESTAMP`,
       [sessionId]
     );
 
     if (result.rows.length > 0) {
       // Update last activity
       await query(
-        'UPDATE user_sessions SET last_activity = CURRENT_TIMESTAMP WHERE id = $1',
+        'UPDATE user_sessions SET last_activity = CURRENT_TIMESTAMP WHERE id = ?',
         [sessionId]
       );
       return true;
@@ -357,14 +360,14 @@ class AuthService {
 
   async invalidateSession(sessionId: string): Promise<void> {
     await query(
-      'UPDATE user_sessions SET is_active = false WHERE id = $1',
+      'UPDATE user_sessions SET is_active = false WHERE id = ?',
       [sessionId]
     );
   }
 
   async invalidateAllUserSessions(userId: string): Promise<void> {
     await query(
-      'UPDATE user_sessions SET is_active = false WHERE user_id = $1',
+      'UPDATE user_sessions SET is_active = false WHERE user_id = ?',
       [userId]
     );
   }

@@ -87,7 +87,7 @@ class FAQService {
     if (params?.limit) searchParams.append('limit', params.limit.toString());
     if (params?.offset) searchParams.append('offset', params.offset.toString());
 
-    const response = await fetch(`${API_BASE_URL}/api/faq?${searchParams}`, {
+    const response = await fetch(`${API_BASE_URL}/faq?${searchParams}`, {
       headers: this.getAuthHeaders()
     });
 
@@ -103,7 +103,7 @@ class FAQService {
     if (category) searchParams.append('category', category);
     if (limit) searchParams.append('limit', limit.toString());
 
-    const response = await fetch(`${API_BASE_URL}/api/faq/search?${searchParams}`, {
+    const response = await fetch(`${API_BASE_URL}/faq/search?${searchParams}`, {
       headers: this.getAuthHeaders()
     });
 
@@ -115,7 +115,7 @@ class FAQService {
   }
 
   async getCategories(): Promise<FAQCategoriesResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/faq/categories`, {
+    const response = await fetch(`${API_BASE_URL}/faq/categories`, {
       headers: this.getAuthHeaders()
     });
 
@@ -127,7 +127,7 @@ class FAQService {
   }
 
   async getFAQById(id: string): Promise<{ success: boolean; data: { faq: FAQ } }> {
-    const response = await fetch(`${API_BASE_URL}/api/faq/${id}`, {
+    const response = await fetch(`${API_BASE_URL}/faq/${id}`, {
       headers: this.getAuthHeaders()
     });
 
@@ -140,7 +140,7 @@ class FAQService {
 
   // Admin-only FAQ endpoints
   async createFAQ(faqData: CreateFAQRequest): Promise<{ success: boolean; message: string; data: { faq: FAQ } }> {
-    const response = await fetch(`${API_BASE_URL}/api/faq`, {
+    const response = await fetch(`${API_BASE_URL}/faq`, {
       method: 'POST',
       headers: this.getAuthHeaders(),
       body: JSON.stringify(faqData)
@@ -155,7 +155,7 @@ class FAQService {
   }
 
   async updateFAQ(id: string, faqData: UpdateFAQRequest): Promise<{ success: boolean; message: string; data: { faq: FAQ } }> {
-    const response = await fetch(`${API_BASE_URL}/api/faq/${id}`, {
+    const response = await fetch(`${API_BASE_URL}/faq/${id}`, {
       method: 'PUT',
       headers: this.getAuthHeaders(),
       body: JSON.stringify(faqData)
@@ -170,7 +170,7 @@ class FAQService {
   }
 
   async deleteFAQ(id: string): Promise<{ success: boolean; message: string }> {
-    const response = await fetch(`${API_BASE_URL}/api/faq/${id}`, {
+    const response = await fetch(`${API_BASE_URL}/faq/${id}`, {
       method: 'DELETE',
       headers: this.getAuthHeaders()
     });

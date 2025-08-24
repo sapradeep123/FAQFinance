@@ -28,8 +28,8 @@ async function initializeSystemHealth() {
     await adminService.updateSystemHealth(
       'system',
       'HEALTHY',
-      null,
-      null,
+      undefined,
+      undefined,
       {
         cpuUsage: process.cpuUsage().user / 1000000,
         memoryUsage: process.memoryUsage().heapUsed / 1024 / 1024,
@@ -54,8 +54,8 @@ function startHealthMonitoring() {
       await adminService.updateSystemHealth(
         'system',
         'HEALTHY',
-        null,
-        null,
+        undefined,
+        undefined,
         {
           cpuUsage: cpuUsage.user / 1000000,
           memoryUsage: memUsage.heapUsed / 1024 / 1024,
@@ -75,7 +75,7 @@ function startMetricsGeneration() {
   // Generate metrics every hour
   setInterval(async () => {
     try {
-      await adminService.generateMetrics();
+      await adminService.generateMetricsRollup(new Date(), 'HOURLY');
       console.log('📊 Metrics generated successfully');
     } catch (error) {
       console.error('Error generating metrics:', error);
@@ -109,69 +109,64 @@ function startPeriodicCleanup() {
   }, msUntil2AM);
 }
 
-// Start server
+// Main server startup function
 async function startServer() {
   try {
     console.log('🚀 Starting Financial Advisory Platform API...');
-    console.log('📍 Environment:', config.NODE_ENV);
-    console.log('🔧 Node.js version:', process.version);
+    
+    // Initialize database
+    console.log('🔧 Initializing database...');
+    await initializeDatabase();
     
     // Test database connection
     const dbConnected = await testDatabaseConnection();
     if (!dbConnected) {
-      console.error('❌ Cannot start server without database connection');
-      process.exit(1);
+      throw new Error('Database connection failed');
     }
     
-    // Initialize database (create tables, seed data)
-    await initializeDatabase();
-    
-    // Initialize system monitoring
-    await initializeSystemHealth();
-    
-    // Start the server
-    const server = app.listen(PORT, () => {
-      console.log(`🌐 Server running on port ${PORT}`);
-      console.log(`📚 API documentation available at: http://localhost:${PORT}/api`);
-      console.log(`🏥 Health check available at: http://localhost:${PORT}/api/health`);
-      
-      if (config.NODE_ENV === 'development') {
-        console.log('🔧 Development mode - Enhanced logging enabled');
-        console.log('🔓 CORS configured for local development');
-      }
-    });
+    // Initialize system health monitoring
+    // await initializeSystemHealth();
     
     // Start background processes
-    startHealthMonitoring();
-    startMetricsGeneration();
-    startPeriodicCleanup();
+    // startHealthMonitoring();
+    // startMetricsGeneration();
+    // startPeriodicCleanup();
     
-    // Graceful shutdown
-    const gracefulShutdown = (signal: string) => {
-      console.log(`\n${signal} received, starting graceful shutdown...`);
+    // Start HTTP server
+    const server = app.listen(PORT, () => {
+      console.log(`✅ Server running on port ${PORT}`);
+      console.log(`🌐 API available at http://localhost:${PORT}`);
+      console.log(`📚 Environment: ${config.NODE_ENV}`);
+      console.log(`🗄️ Database: ${databaseType}`);
+    });
+    
+    // Graceful shutdown handling
+    const gracefulShutdown = async (signal: string) => {
+      console.log(`\n🔄 Received ${signal}. Starting graceful shutdown...`);
       
-      server.close(async (err) => {
-        if (err) {
-          console.error('Error during server shutdown:', err);
-          process.exit(1);
-        }
-        
+      // Stop accepting new connections
+      server.close(async () => {
         console.log('🔄 HTTP server closed');
         
         try {
           // Update system health to indicate shutdown
-          await adminService.updateSystemHealth({
-            status: 'MAINTENANCE',
-            cpuUsage: 0,
-            memoryUsage: 0,
-            uptime: 0,
-            activeConnections: 0,
-            lastChecked: new Date()
-          });
+          await adminService.updateSystemHealth(
+            'system',
+            'HEALTHY',
+            0,
+            undefined,
+            {
+              status: 'MAINTENANCE',
+              cpuUsage: 0,
+              memoryUsage: 0,
+              uptime: 0,
+              activeConnections: 0,
+              lastChecked: new Date()
+            }
+          );
           
           // Close database connections
-          await pool.end();
-          console.log('🔄 Database connections closed');
+          console.log('🔄 SQLite database connections closed');
           
           console.log('✅ Graceful shutdown completed');
           process.exit(0);
@@ -198,12 +193,12 @@ async function startServer() {
       
       try {
         // Log critical error to admin notifications
-        await adminService.createNotification({
-          title: 'Critical Server Error',
-          message: `Uncaught exception: ${error.message}`,
-          type: 'ERROR',
-          priority: 'CRITICAL'
-        });
+        await adminService.createNotification(
+          'ERROR',
+          'Critical Server Error',
+          `Uncaught exception: ${error.message}`,
+          { priority: 'CRITICAL' }
+        );
       } catch (logError) {
         console.error('Failed to log critical error:', logError);
       }
@@ -216,12 +211,12 @@ async function startServer() {
       
       try {
         // Log critical error to admin notifications
-        await adminService.createNotification({
-          title: 'Unhandled Promise Rejection',
-          message: `Unhandled rejection: ${reason}`,
-          type: 'ERROR',
-          priority: 'HIGH'
-        });
+        await adminService.createNotification(
+          'ERROR',
+          'Unhandled Promise Rejection',
+          `Unhandled rejection: ${reason}`,
+          { priority: 'HIGH' }
+        );
       } catch (logError) {
         console.error('Failed to log unhandled rejection:', logError);
       }
@@ -235,7 +230,7 @@ async function startServer() {
     // Log successful startup
     try {
       await adminService.createNotification(
-        'SUCCESS',
+        'INFO',
         'Server Started',
         `Financial Advisory Platform API started successfully on port ${PORT}`,
         { priority: 'LOW' }

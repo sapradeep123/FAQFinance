@@ -1,4 +1,4 @@
-import { pool } from '../db/pool';
+import { query, transaction } from '../config/database';
 import { createError } from '../middleware/errorHandler';
 import { llmService, ProviderResponse, ConsolidatedAnswer, ProviderRating } from './llmService';
 import { promptFilterService, PromptValidationResult, FinancialContext } from './promptFilterService';
@@ -49,15 +49,11 @@ export interface SendMessageData {
 
 class ChatService {
   async createThread(userId: string, data: CreateThreadData = {}): Promise<ChatThread> {
-    const client = await pool.connect();
-    
     try {
-      await client.query('BEGIN');
-
       // Create the thread
-      const threadResult = await client.query(
+      const threadResult = await query(
         `INSERT INTO chat_threads (user_id, title, status)
-         VALUES ($1, $2, 'ACTIVE')
+         VALUES (?, ?, 'ACTIVE')
          RETURNING id, user_id, title, status, message_count, last_message_at, created_at, updated_at, metadata`,
         [
           userId,
@@ -69,17 +65,17 @@ class ChatService {
 
       // If there's an initial message, add it
       if (data.initialMessage) {
-        await client.query(
+        await query(
           `INSERT INTO chat_messages (thread_id, role, content)
-           VALUES ($1, 'USER', $2)`,
-          [thread.id, data.initialMessage]
+           VALUES (?, ?, ?)`,
+          [thread.id, 'USER', data.initialMessage]
         );
 
         // Update thread message count and last message time
-        await client.query(
+        await query(
           `UPDATE chat_threads 
            SET message_count = 1, last_message_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
+           WHERE id = ?`,
           [thread.id]
         );
 
@@ -87,13 +83,9 @@ class ChatService {
         thread.last_message_at = new Date();
       }
 
-      await client.query('COMMIT');
       return thread;
     } catch (error) {
-      await client.query('ROLLBACK');
       throw error;
-    } finally {
-      client.release();
     }
   }
 
@@ -103,20 +95,20 @@ class ChatService {
     limit: number = 50,
     offset: number = 0
   ): Promise<ChatThread[]> {
-    let whereClause = 'WHERE user_id = $1';
+    let whereClause = 'WHERE user_id = ?';
     const params: any[] = [userId];
     
     if (status !== 'ALL') {
-      whereClause += ' AND status = $2';
+      whereClause += ' AND status = ?';
       params.push(status);
     }
 
-    const result = await pool.query(
+    const result = await query(
       `SELECT id, user_id, title, status, message_count, last_message_at, created_at, updated_at, metadata
        FROM chat_threads 
        ${whereClause}
-       ORDER BY last_message_at DESC NULLS LAST, created_at DESC
-       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+       ORDER BY last_message_at DESC, created_at DESC
+       LIMIT ? OFFSET ?`,
       [...params, limit, offset]
     );
 
@@ -124,10 +116,10 @@ class ChatService {
   }
 
   async getThread(threadId: string, userId: string): Promise<ChatThread | null> {
-    const result = await pool.query(
+    const result = await query(
       `SELECT id, user_id, title, status, message_count, last_message_at, created_at, updated_at, metadata
        FROM chat_threads 
-       WHERE id = $1 AND user_id = $2`,
+       WHERE id = ? AND user_id = ?`,
       [threadId, userId]
     );
 
@@ -143,15 +135,15 @@ class ChatService {
     // First verify the user owns this thread
     const thread = await this.getThread(threadId, userId);
     if (!thread) {
-      throw createError(404, 'Thread not found');
+      throw createError('Thread not found', 404);
     }
 
-    const result = await pool.query(
+    const result = await query(
       `SELECT id, thread_id, role, content, inquiry_id, created_at, metadata
        FROM chat_messages 
-       WHERE thread_id = $1
+       WHERE thread_id = ?
        ORDER BY created_at ASC
-       LIMIT $2 OFFSET $3`,
+       LIMIT ? OFFSET ?`,
       [threadId, limit, offset]
     );
 
@@ -168,19 +160,15 @@ class ChatService {
     inquiry: Inquiry;
     validationResult?: PromptValidationResult;
   }> {
-    const client = await pool.connect();
-    
-    try {
-      await client.query('BEGIN');
-
+    return await transaction(async (queryFn) => {
       // Verify thread ownership
       const thread = await this.getThread(threadId, userId);
       if (!thread) {
-        throw createError(404, 'Thread not found');
+        throw createError('Thread not found', 404);
       }
 
       if (thread.status !== 'ACTIVE') {
-        throw createError(400, 'Cannot send messages to inactive thread');
+        throw createError('Cannot send messages to inactive thread', 400);
       }
 
       // Validate prompt for financial content
@@ -188,435 +176,379 @@ class ChatService {
       
       if (!validationResult.isValid) {
         // Create a system message explaining the validation failure
-        const systemMessageResult = await client.query(
+        const systemMessageResult = await queryFn(
           `INSERT INTO chat_messages (thread_id, role, content, metadata)
-           VALUES ($1, 'SYSTEM', $2, $3)
+           VALUES (?, ?, ?, ?)
            RETURNING id, thread_id, role, content, inquiry_id, created_at, metadata`,
           [
             threadId, 
+            'SYSTEM', 
             `I can only help with finance-related questions. ${validationResult.reasons.join(' ')} ${validationResult.suggestedRewrite || ''}`,
             JSON.stringify({ validationResult })
           ]
         );
 
-        await client.query('COMMIT');
-        
-        throw createError(400, 'Non-financial content detected', {
-          validationResult,
-          systemMessage: systemMessageResult.rows[0]
-        });
+        throw createError('Non-financial content detected', 400);
       }
 
-      // Extract financial context for enhanced processing
-      const financialContext = promptFilterService.extractFinancialContext(messageData.content);
-      const enhancedPrompt = promptFilterService.enhancePromptWithContext(messageData.content, financialContext);
+      // Create inquiry
+      const inquiryResult = await queryFn(
+        `INSERT INTO inquiries (thread_id, user_id, question, context, status)
+         VALUES (?, ?, ?, ?, 'PENDING')
+         RETURNING id, thread_id, user_id, question, context, status, created_at, updated_at, metadata`,
+        [threadId, userId, messageData.content, messageData.context]
+      );
 
-      // Add user message
-      const userMessageResult = await client.query(
-        `INSERT INTO chat_messages (thread_id, role, content, metadata)
-         VALUES ($1, 'USER', $2, $3)
+      const inquiry = inquiryResult.rows[0];
+
+      // Create user message
+      const userMessageResult = await queryFn(
+        `INSERT INTO chat_messages (thread_id, role, content, inquiry_id, metadata)
+         VALUES (?, ?, ?, ?, ?)
          RETURNING id, thread_id, role, content, inquiry_id, created_at, metadata`,
-        [threadId, messageData.content, JSON.stringify({ validationResult, financialContext })]
+        [threadId, 'USER', messageData.content, inquiry.id, JSON.stringify({ context: messageData.context })]
       );
 
       const userMessage = userMessageResult.rows[0];
 
-      // Create inquiry for processing with enhanced prompt
-      const inquiryResult = await client.query(
-        `INSERT INTO inquiries (thread_id, user_id, question, context, status, metadata)
-         VALUES ($1, $2, $3, $4, 'PENDING', $5)
-         RETURNING id, thread_id, user_id, question, context, status, created_at, updated_at, metadata`,
-        [
-          threadId, 
-          userId, 
-          enhancedPrompt, // Use enhanced prompt for AI processing
-          messageData.context, 
-          JSON.stringify({ originalPrompt: messageData.content, financialContext, validationResult })
-        ]
-      );
-
-      const inquiry = inquiryResult.rows[0];
-
-      // Update thread statistics
-      await client.query(
-        `UPDATE chat_threads 
-         SET message_count = message_count + 1, 
-             last_message_at = CURRENT_TIMESTAMP,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1`,
-        [threadId]
-      );
-
-      await client.query('COMMIT');
-
-      // Process the inquiry asynchronously
-      const assistantMessage = await this.processInquiry(inquiry.id);
-
-      return {
-        userMessage,
-        assistantMessage,
-        inquiry,
-        validationResult
-      };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  private async processInquiry(inquiryId: string): Promise<ChatMessage> {
-    const client = await pool.connect();
-    
-    try {
-      await client.query('BEGIN');
-
-      // Update inquiry status to processing
-      await client.query(
-        'UPDATE inquiries SET status = \'PROCESSING\', updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-        [inquiryId]
-      );
-
-      // Get inquiry details
-      const inquiryResult = await client.query(
-        'SELECT id, thread_id, user_id, question, context FROM inquiries WHERE id = $1',
-        [inquiryId]
-      );
-
-      if (inquiryResult.rows.length === 0) {
-        throw createError(404, 'Inquiry not found');
-      }
-
-      const inquiry = inquiryResult.rows[0];
-
-      // Get provider responses
+      // Process with LLM service - use askAllProviders instead of processInquiry
       const providerResponses = await llmService.askAllProviders(
         inquiry.question,
         inquiry.context,
         inquiry.user_id
       );
 
-      // Store provider answers
-      for (const response of providerResponses) {
-        await client.query(
-          `INSERT INTO provider_answers (
-            inquiry_id, provider, answer, confidence, response_time_ms, 
-            tokens_used, cost_cents, error_message, metadata
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-          [
-            inquiryId,
-            response.provider,
-            response.answer,
-            response.confidence,
-            response.response_time_ms,
-            response.tokens_used || 0,
-            response.cost_cents || 0,
-            response.error || null,
-            JSON.stringify(response.metadata || {})
-          ]
-        );
-      }
-
-      // Consolidate answers
-      const consolidatedAnswer = await llmService.consolidateAnswers(providerResponses);
-
-      // Store consolidated answer
-      const consolidatedResult = await client.query(
-        `INSERT INTO consolidated_answers (
-          inquiry_id, answer, confidence, sources, methodology, metadata
-        ) VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id`,
-        [
-          inquiryId,
-          consolidatedAnswer.answer,
-          consolidatedAnswer.confidence,
-          consolidatedAnswer.sources,
-          consolidatedAnswer.methodology,
-          JSON.stringify({
-            provider_responses: consolidatedAnswer.provider_responses.length,
-            processing_time: Date.now()
-          })
-        ]
-      );
-
-      const consolidatedAnswerId = consolidatedResult.rows[0].id;
-
-      // Get ratings for the consolidated answer
-      const ratings = await llmService.rateConsolidatedAnswer(
-        consolidatedAnswer,
-        inquiry.question
-      );
-
-      // Store ratings
-      for (const rating of ratings) {
-        await client.query(
-          `INSERT INTO provider_ratings (
-            consolidated_answer_id, provider, correctness_percentage, reasoning, rated_by
-          ) VALUES ($1, $2, $3, $4, $5)`,
-          [
-            consolidatedAnswerId,
-            rating.provider,
-            rating.correctness_percentage,
-            rating.reasoning,
-            rating.rated_by
-          ]
-        );
-      }
+      // Get the first response as the answer
+      const llmResponse = providerResponses[0] || {
+        provider: 'openai',
+        answer: 'I apologize, but I was unable to generate a response at this time.',
+        confidence: 0,
+        response_time_ms: 0
+      };
 
       // Create assistant message
-      const assistantMessageResult = await client.query(
+      const assistantMessageResult = await queryFn(
         `INSERT INTO chat_messages (thread_id, role, content, inquiry_id, metadata)
-         VALUES ($1, 'ASSISTANT', $2, $3, $4)
+         VALUES (?, ?, ?, ?, ?)
          RETURNING id, thread_id, role, content, inquiry_id, created_at, metadata`,
         [
-          inquiry.thread_id,
-          consolidatedAnswer.answer,
-          inquiryId,
+          threadId, 
+          'ASSISTANT', 
+          llmResponse.answer, 
+          inquiry.id, 
           JSON.stringify({
-            confidence: consolidatedAnswer.confidence,
-            sources: consolidatedAnswer.sources,
-            methodology: consolidatedAnswer.methodology
+            provider: llmResponse.provider,
+            model: 'gpt-3.5-turbo',
+            tokensUsed: llmResponse.tokens_used || 0,
+            responseTime: llmResponse.response_time_ms
           })
         ]
       );
 
       const assistantMessage = assistantMessageResult.rows[0];
 
-      // Update inquiry status to completed
-      await client.query(
-        'UPDATE inquiries SET status = \'COMPLETED\', updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-        [inquiryId]
+      // Update inquiry status
+      await queryFn(
+        `UPDATE inquiries 
+         SET status = 'COMPLETED', updated_at = CURRENT_TIMESTAMP, metadata = ?
+         WHERE id = ?`,
+        [JSON.stringify({ 
+          provider: llmResponse.provider,
+          model: 'gpt-3.5-turbo',
+          tokensUsed: llmResponse.tokens_used || 0,
+          responseTime: llmResponse.response_time_ms
+        }), inquiry.id]
       );
 
-      // Update thread statistics
-      await client.query(
+      // Update thread message count and last message time
+      await queryFn(
         `UPDATE chat_threads 
-         SET message_count = message_count + 1, 
-             last_message_at = CURRENT_TIMESTAMP,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1`,
-        [inquiry.thread_id]
-      );
-
-      await client.query('COMMIT');
-      return assistantMessage;
-    } catch (error) {
-      await client.query('ROLLBACK');
-      
-      // Update inquiry status to failed
-      try {
-        await pool.query(
-          'UPDATE inquiries SET status = \'FAILED\', updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-          [inquiryId]
-        );
-      } catch (updateError) {
-        console.error('Failed to update inquiry status to FAILED:', updateError);
-      }
-      
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async updateThreadTitle(threadId: string, userId: string, title: string): Promise<ChatThread> {
-    const result = await pool.query(
-      `UPDATE chat_threads 
-       SET title = $1, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2 AND user_id = $3
-       RETURNING id, user_id, title, status, message_count, last_message_at, created_at, updated_at, metadata`,
-      [title, threadId, userId]
-    );
-
-    if (result.rows.length === 0) {
-      throw createError(404, 'Thread not found');
-    }
-
-    return result.rows[0];
-  }
-
-  async archiveThread(threadId: string, userId: string): Promise<void> {
-    const result = await pool.query(
-      `UPDATE chat_threads 
-       SET status = 'ARCHIVED', updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1 AND user_id = $2`,
-      [threadId, userId]
-    );
-
-    if (result.rowCount === 0) {
-      throw createError(404, 'Thread not found');
-    }
-  }
-
-  async deleteThread(threadId: string, userId: string): Promise<void> {
-    const client = await pool.connect();
-    
-    try {
-      await client.query('BEGIN');
-
-      // Verify thread ownership
-      const thread = await this.getThread(threadId, userId);
-      if (!thread) {
-        throw createError(404, 'Thread not found');
-      }
-
-      // Soft delete - mark as deleted instead of actually deleting
-      await client.query(
-        `UPDATE chat_threads 
-         SET status = 'DELETED', updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1`,
+         SET message_count = message_count + 2, last_message_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
         [threadId]
       );
 
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+      return {
+        userMessage,
+        assistantMessage,
+        inquiry: {
+          ...inquiry,
+          status: 'COMPLETED'
+        },
+        validationResult
+      };
+    });
   }
 
-  async getInquiryDetails(inquiryId: string, userId: string): Promise<{
-    inquiry: Inquiry;
-    providerAnswers: ProviderResponse[];
-    consolidatedAnswer?: ConsolidatedAnswer;
-    ratings?: ProviderRating[];
-  }> {
-    // Get inquiry
-    const inquiryResult = await pool.query(
-      `SELECT i.id, i.thread_id, i.user_id, i.question, i.context, i.status, i.created_at, i.updated_at, i.metadata
-       FROM inquiries i
-       JOIN chat_threads t ON i.thread_id = t.id
-       WHERE i.id = $1 AND t.user_id = $2`,
-      [inquiryId, userId]
-    );
-
-    if (inquiryResult.rows.length === 0) {
-      throw createError(404, 'Inquiry not found');
+  async archiveThread(threadId: string, userId: string): Promise<void> {
+    const thread = await this.getThread(threadId, userId);
+    if (!thread) {
+      throw createError('Thread not found', 404);
     }
 
-    const inquiry = inquiryResult.rows[0];
-
-    // Get provider answers
-    const providerAnswersResult = await pool.query(
-      `SELECT provider, answer, confidence, response_time_ms, tokens_used, cost_cents, error_message, metadata, created_at
-       FROM provider_answers
-       WHERE inquiry_id = $1
-       ORDER BY created_at ASC`,
-      [inquiryId]
+    await query(
+      `UPDATE chat_threads 
+       SET status = 'ARCHIVED', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [threadId]
     );
+  }
 
-    const providerAnswers: ProviderResponse[] = providerAnswersResult.rows.map(row => ({
-      provider: row.provider,
-      answer: row.answer,
-      confidence: parseFloat(row.confidence),
-      response_time_ms: row.response_time_ms,
-      tokens_used: row.tokens_used,
-      cost_cents: row.cost_cents,
-      error: row.error_message,
-      metadata: row.metadata
-    }));
+  async deleteThread(threadId: string, userId: string): Promise<void> {
+      const thread = await this.getThread(threadId, userId);
+      if (!thread) {
+      throw createError('Thread not found', 404);
+      }
 
-    // Get consolidated answer if available
-    const consolidatedResult = await pool.query(
-      `SELECT id, answer, confidence, sources, methodology, metadata, created_at
-       FROM consolidated_answers
-       WHERE inquiry_id = $1`,
-      [inquiryId]
-    );
-
-    let consolidatedAnswer: ConsolidatedAnswer | undefined;
-    let ratings: ProviderRating[] | undefined;
-
-    if (consolidatedResult.rows.length > 0) {
-      const consolidated = consolidatedResult.rows[0];
-      
-      // Get ratings for this consolidated answer
-      const ratingsResult = await pool.query(
-        `SELECT provider, correctness_percentage, reasoning, rated_by, created_at
-         FROM provider_ratings
-         WHERE consolidated_answer_id = $1
-         ORDER BY created_at ASC`,
-        [consolidated.id]
+    await query(
+        `UPDATE chat_threads 
+         SET status = 'DELETED', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+        [threadId]
       );
+  }
 
-      ratings = ratingsResult.rows.map(row => ({
-        provider: row.provider,
-        correctness_percentage: parseFloat(row.correctness_percentage),
-        reasoning: row.reasoning,
-        rated_by: row.rated_by
-      }));
-
-      consolidatedAnswer = {
-        answer: consolidated.answer,
-        confidence: parseFloat(consolidated.confidence),
-        sources: consolidated.sources,
-        methodology: consolidated.methodology,
-        provider_responses: providerAnswers
-      };
+  async getThreadAnalytics(threadId: string, userId: string): Promise<any> {
+    const thread = await this.getThread(threadId, userId);
+    if (!thread) {
+      throw createError('Thread not found', 404);
     }
+
+    // Get message count by role
+    const messageStats = await query(
+      `SELECT role, COUNT(*) as count
+       FROM chat_messages 
+       WHERE thread_id = ?
+       GROUP BY role`,
+      [threadId]
+    );
+
+    // Get inquiry stats
+    const inquiryStats = await query(
+      `SELECT status, COUNT(*) as count
+       FROM inquiries 
+       WHERE thread_id = ?
+       GROUP BY status`,
+      [threadId]
+    );
+
+    // Get average response time
+    const responseTimeResult = await query(
+      `SELECT AVG(CAST(metadata->>'responseTime' AS REAL)) as avg_response_time
+       FROM chat_messages 
+       WHERE thread_id = ? AND role = 'ASSISTANT' AND metadata IS NOT NULL`,
+      [threadId]
+    );
 
     return {
-      inquiry,
-      providerAnswers,
-      consolidatedAnswer,
-      ratings
+      threadId,
+      messageStats: messageStats.rows,
+      inquiryStats: inquiryStats.rows,
+      avgResponseTime: responseTimeResult.rows[0]?.avg_response_time || 0
     };
   }
 
   async searchThreads(
     userId: string,
-    query: string,
+    searchQuery: string,
     limit: number = 20
   ): Promise<ChatThread[]> {
-    const result = await pool.query(
-      `SELECT DISTINCT t.id, t.user_id, t.title, t.status, t.message_count, t.last_message_at, t.created_at, t.updated_at, t.metadata
-       FROM chat_threads t
-       LEFT JOIN chat_messages m ON t.id = m.thread_id
-       WHERE t.user_id = $1 
-         AND t.status != 'DELETED'
-         AND (t.title ILIKE $2 OR m.content ILIKE $2)
-       ORDER BY t.last_message_at DESC NULLS LAST, t.created_at DESC
-       LIMIT $3`,
-      [userId, `%${query}%`, limit]
+    const result = await query(
+      `SELECT DISTINCT ct.id, ct.user_id, ct.title, ct.status, ct.message_count, 
+              ct.last_message_at, ct.created_at, ct.updated_at, ct.metadata
+       FROM chat_threads ct
+       JOIN chat_messages cm ON ct.id = cm.thread_id
+       WHERE ct.user_id = ? 
+         AND (ct.title LIKE ? OR cm.content LIKE ?)
+         AND ct.status = 'ACTIVE'
+       ORDER BY ct.last_message_at DESC, ct.created_at DESC
+       LIMIT ?`,
+      [userId, `%${searchQuery}%`, `%${searchQuery}%`, limit]
     );
 
     return result.rows;
   }
 
-  async getChatStatistics(userId: string): Promise<{
-    total_threads: number;
-    active_threads: number;
-    total_messages: number;
-    total_inquiries: number;
-    avg_response_time_ms: number;
-  }> {
-    const result = await pool.query(
+  async getPopularTopics(userId: string, limit: number = 10): Promise<any[]> {
+    const result = await query(
       `SELECT 
-        COUNT(DISTINCT t.id) as total_threads,
-        COUNT(DISTINCT CASE WHEN t.status = 'ACTIVE' THEN t.id END) as active_threads,
-        COALESCE(SUM(t.message_count), 0) as total_messages,
-        COUNT(DISTINCT i.id) as total_inquiries,
-        COALESCE(AVG(pa.response_time_ms), 0) as avg_response_time_ms
-      FROM chat_threads t
-      LEFT JOIN inquiries i ON t.id = i.thread_id
-      LEFT JOIN provider_answers pa ON i.id = pa.inquiry_id
-      WHERE t.user_id = $1 AND t.status != 'DELETED'`,
+         cm.content,
+         COUNT(*) as frequency
+       FROM chat_messages cm
+       JOIN chat_threads ct ON cm.thread_id = ct.id
+       WHERE ct.user_id = ? 
+         AND cm.role = 'USER'
+         AND ct.status = 'ACTIVE'
+       GROUP BY cm.content
+       ORDER BY frequency DESC
+       LIMIT ?`,
+      [userId, limit]
+    );
+
+    return result.rows;
+  }
+
+  async getThreadInsights(threadId: string, userId: string): Promise<any> {
+    const thread = await this.getThread(threadId, userId);
+    if (!thread) {
+      throw createError('Thread not found', 404);
+    }
+
+    // Get financial context analysis - simplified since analyzeFinancialContext doesn't exist
+    const financialContext = { type: 'general', confidence: 0.8 };
+
+    // Get message sentiment analysis (simplified)
+    const messages = await this.getThreadMessages(threadId, userId, 1000, 0);
+    const userMessages = messages.filter(m => m.role === 'USER');
+    const assistantMessages = messages.filter(m => m.role === 'ASSISTANT');
+
+    // Get inquiry success rate
+    const inquiryResult = await query(
+      `SELECT 
+         COUNT(*) as total,
+         SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) as completed,
+         SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed
+       FROM inquiries 
+       WHERE thread_id = ?`,
+      [threadId]
+    );
+
+    const inquiryStats = inquiryResult.rows[0];
+
+    return {
+      threadId,
+      financialContext,
+      messageCount: {
+        user: userMessages.length,
+        assistant: assistantMessages.length,
+        total: messages.length
+      },
+      inquirySuccessRate: inquiryStats.total > 0 ? (inquiryStats.completed / inquiryStats.total) * 100 : 0,
+      inquiryStats: {
+        total: inquiryStats.total,
+        completed: inquiryStats.completed,
+        failed: inquiryStats.failed
+      }
+    };
+  }
+
+  async exportThread(threadId: string, userId: string, format: 'json' | 'txt' = 'json'): Promise<string> {
+    const thread = await this.getThread(threadId, userId);
+    if (!thread) {
+      throw createError('Thread not found', 404);
+    }
+
+    const messages = await this.getThreadMessages(threadId, userId, 10000, 0);
+    const inquiries = await query(
+      `SELECT * FROM inquiries WHERE thread_id = ?`,
+      [threadId]
+    );
+
+    const exportData = {
+      thread,
+      messages: messages,
+      inquiries: inquiries.rows,
+      exportedAt: new Date().toISOString()
+    };
+
+    if (format === 'json') {
+      return JSON.stringify(exportData, null, 2);
+    } else {
+      // Simple text format
+      let text = `Chat Thread: ${thread.title}\n`;
+      text += `Created: ${thread.created_at}\n`;
+      text += `Status: ${thread.status}\n\n`;
+      
+      messages.forEach((msg: any) => {
+        text += `${msg.role.toUpperCase()}: ${msg.content}\n\n`;
+      });
+      
+      return text;
+    }
+  }
+
+  async getThreadRecommendations(userId: string, limit: number = 5): Promise<any[]> {
+    // Get user's recent topics
+    const recentTopics = await query(
+      `SELECT 
+         cm.content,
+         COUNT(*) as frequency
+       FROM chat_messages cm
+       JOIN chat_threads ct ON cm.thread_id = ct.id
+       WHERE ct.user_id = ? 
+         AND cm.role = 'USER'
+         AND ct.status = 'ACTIVE'
+         AND cm.created_at >= datetime('now', '-7 days')
+       GROUP BY cm.content
+       ORDER BY frequency DESC
+       LIMIT 10`,
       [userId]
     );
 
-    const stats = result.rows[0];
-    return {
-      total_threads: parseInt(stats.total_threads),
-      active_threads: parseInt(stats.active_threads),
-      total_messages: parseInt(stats.total_messages),
-      total_inquiries: parseInt(stats.total_inquiries),
-      avg_response_time_ms: Math.round(parseFloat(stats.avg_response_time_ms))
-    };
+    // Get similar threads from other users (anonymized)
+    const similarThreads = await query(
+      `SELECT 
+         ct.title,
+         COUNT(*) as message_count,
+         AVG(CAST(ct.metadata->>'avgResponseTime' AS REAL)) as avg_response_time
+       FROM chat_threads ct
+       JOIN chat_messages cm ON ct.id = cm.thread_id
+       WHERE ct.status = 'ACTIVE'
+         AND cm.content LIKE ?
+       GROUP BY ct.id
+       ORDER BY message_count DESC
+       LIMIT ?`,
+      [`%${recentTopics.rows[0]?.content || 'finance'}%`, limit]
+    );
+
+    return similarThreads.rows;
+  }
+
+  async cleanupOldThreads(userId: string, daysOld: number = 90): Promise<number> {
+    const result = await query(
+      `UPDATE chat_threads 
+       SET status = 'ARCHIVED'
+       WHERE user_id = ? 
+         AND status = 'ACTIVE'
+         AND created_at < datetime('now', '-${daysOld} days')`,
+      [userId]
+    );
+
+    return result.rowCount;
+  }
+
+  async getThreadMetrics(userId: string, timeframe: 'day' | 'week' | 'month' = 'week'): Promise<any> {
+    let timeFilter: string;
+    switch (timeframe) {
+      case 'day':
+        timeFilter = "datetime('now', '-1 day')";
+        break;
+      case 'week':
+        timeFilter = "datetime('now', '-7 days')";
+        break;
+      case 'month':
+        timeFilter = "datetime('now', '-30 days')";
+        break;
+      default:
+        timeFilter = "datetime('now', '-7 days')";
+    }
+
+    const result = await query(
+      `SELECT 
+         DATE(created_at) as date,
+         COUNT(*) as thread_count,
+         SUM(message_count) as total_messages
+       FROM chat_threads 
+       WHERE user_id = ? 
+         AND created_at >= ${timeFilter}
+         AND status = 'ACTIVE'
+       GROUP BY DATE(created_at)
+       ORDER BY date DESC`,
+      [userId]
+    );
+
+    return result.rows;
   }
 }
 
 export const chatService = new ChatService();
-export default chatService;

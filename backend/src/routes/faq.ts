@@ -11,8 +11,13 @@ const router = Router();
 // Validation middleware
 const createFaqValidation = [
   body('category')
-    .isIn(['BANKING', 'LOANS', 'INVESTMENTS', 'TAX', 'CARDS', 'GENERAL'])
-    .withMessage('Category must be BANKING, LOANS, INVESTMENTS, TAX, CARDS, or GENERAL'),
+    .isString()
+    .trim()
+    .custom(async (value) => {
+      const res = await dbQuery('SELECT 1 FROM faq_categories WHERE name = $1 AND is_active = TRUE', [value]);
+      if (res.rows.length === 0) throw new Error('Category does not exist or is inactive');
+      return true;
+    }),
   body('question')
     .trim()
     .isLength({ min: 10, max: 500 })
@@ -39,8 +44,11 @@ const createFaqValidation = [
 const updateFaqValidation = [
   body('category')
     .optional()
-    .isIn(['BANKING', 'LOANS', 'INVESTMENTS', 'TAX', 'CARDS', 'GENERAL'])
-    .withMessage('Category must be BANKING, LOANS, INVESTMENTS, TAX, CARDS, or GENERAL'),
+    .custom(async (value) => {
+      const res = await dbQuery('SELECT 1 FROM faq_categories WHERE name = $1 AND is_active = TRUE', [value]);
+      if (res.rows.length === 0) throw new Error('Category does not exist or is inactive');
+      return true;
+    }),
   body('question')
     .optional()
     .trim()
@@ -69,8 +77,11 @@ const updateFaqValidation = [
 const getFaqsValidation = [
   query('category')
     .optional()
-    .isIn(['BANKING', 'LOANS', 'INVESTMENTS', 'TAX', 'CARDS', 'GENERAL'])
-    .withMessage('Category must be BANKING, LOANS, INVESTMENTS, TAX, CARDS, or GENERAL'),
+    .custom(async (value) => {
+      const res = await dbQuery('SELECT 1 FROM faq_categories WHERE name = $1', [value]);
+      if (res.rows.length === 0) throw new Error('Category does not exist');
+      return true;
+    }),
   query('status')
     .optional()
     .isIn(['ACTIVE', 'INACTIVE', 'ALL'])
@@ -92,8 +103,11 @@ const searchFaqsValidation = [
     .withMessage('Search query must be between 2 and 100 characters'),
   query('category')
     .optional()
-    .isIn(['BANKING', 'LOANS', 'INVESTMENTS', 'TAX', 'CARDS', 'GENERAL'])
-    .withMessage('Category must be BANKING, LOANS, INVESTMENTS, TAX, CARDS, or GENERAL'),
+    .custom(async (value) => {
+      const res = await dbQuery('SELECT 1 FROM faq_categories WHERE name = $1', [value]);
+      if (res.rows.length === 0) throw new Error('Category does not exist');
+      return true;
+    }),
   query('limit')
     .optional()
     .isInt({ min: 1, max: 50 })
@@ -290,17 +304,20 @@ router.get('/categories',
     const startTime = Date.now();
     
     try {
-      const query = `
-        SELECT 
-          category,
-          COUNT(*) as total_count,
-          COUNT(*) FILTER (WHERE status = 'ACTIVE') as active_count
-        FROM faqs
-        GROUP BY category
-        ORDER BY category
-      `;
-      
-      const result = await dbQuery(query);
+      const result = await dbQuery(`
+        SELECT c.name as category,
+               COALESCE(f.total_count,0) as total_count,
+               COALESCE(f.active_count,0) as active_count
+        FROM faq_categories c
+        LEFT JOIN (
+          SELECT category, COUNT(*) as total_count,
+                 COUNT(*) FILTER (WHERE status='ACTIVE') as active_count
+          FROM faqs
+          GROUP BY category
+        ) f ON f.category = c.name
+        WHERE c.is_active = TRUE
+        ORDER BY c.sort_order, c.name
+      `);
       const categories = result.rows;
 
       // Log successful categories fetch

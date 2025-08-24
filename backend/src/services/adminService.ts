@@ -1,4 +1,5 @@
-import { query, transaction } from '../config/database';
+import { query as dbQuery, transaction } from '../config/database';
+const query = dbQuery;
 import { createError } from '../middleware/errorHandler';
 
 export interface ApiConfig {
@@ -119,20 +120,20 @@ export interface UserActivity {
 class AdminService {
   // API Configuration Management
   async getApiConfigs(provider?: string): Promise<ApiConfig[]> {
-    let query = `
+    let sql = `
       SELECT id, provider, config_key, config_value, is_active, created_at, updated_at
       FROM api_configs
     `;
     const params: any[] = [];
 
     if (provider) {
-      query += ' WHERE provider = $1';
+      sql += ' WHERE provider = ?';
       params.push(provider);
     }
 
-    query += ' ORDER BY provider, config_key';
+    sql += ' ORDER BY provider, config_key';
 
-    const result = await query(query, params);
+    const result = await query(sql, params);
     return result.rows;
   }
 
@@ -144,13 +145,11 @@ class AdminService {
   ): Promise<ApiConfig> {
     const result = await query(
       `INSERT INTO api_configs (provider, config_key, config_value, is_active)
-       VALUES ($1, $2, $3, $4)
+       VALUES (?, ?, ?, ?)
        ON CONFLICT (provider, config_key)
-       DO UPDATE SET 
-         config_value = EXCLUDED.config_value,
-         is_active = EXCLUDED.is_active,
-         updated_at = CURRENT_TIMESTAMP
-       RETURNING id, provider, config_key, config_value, is_active, created_at, updated_at`,
+       DO UPDATE SET config_value = EXCLUDED.config_value,
+                     is_active = EXCLUDED.is_active,
+                     updated_at = NOW()`,
       [provider, configKey, configValue, isActive]
     );
 
@@ -159,12 +158,12 @@ class AdminService {
 
   async deleteApiConfig(provider: string, configKey: string): Promise<void> {
     const result = await query(
-      'DELETE FROM api_configs WHERE provider = $1 AND config_key = $2',
+      'DELETE FROM api_configs WHERE provider = ? AND config_key = ?',
       [provider, configKey]
     );
 
     if (result.rowCount === 0) {
-      throw createError(404, 'API configuration not found');
+      throw createError('API configuration not found', 404);
     }
   }
 
@@ -180,10 +179,10 @@ class AdminService {
     errorMessage?: string
   ): Promise<void> {
     await query(
-      `INSERT INTO usage_logs (
-        user_id, endpoint, method, status_code, response_time_ms, 
+      `INSERT INTO api_usage (
+        user_id, endpoint, method, status_code, response_time, 
         ip_address, user_agent, error_message
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         userId || null,
         endpoint,
@@ -205,39 +204,38 @@ class AdminService {
     startDate?: Date,
     endDate?: Date
   ): Promise<UsageLog[]> {
-    let query = `
-      SELECT id, user_id, endpoint, method, status_code, response_time_ms, 
+    let sql = `
+      SELECT id, user_id, endpoint, method, status_code, response_time, 
              ip_address, user_agent, error_message, created_at
-      FROM usage_logs
+      FROM api_usage
       WHERE 1=1
     `;
     const params: any[] = [];
-    let paramIndex = 1;
 
     if (endpoint) {
-      query += ` AND endpoint = $${paramIndex++}`;
+      sql += ` AND endpoint = ?`;
       params.push(endpoint);
     }
 
     if (userId) {
-      query += ` AND user_id = $${paramIndex++}`;
+      sql += ` AND user_id = ?`;
       params.push(userId);
     }
 
     if (startDate) {
-      query += ` AND created_at >= $${paramIndex++}`;
+      sql += ` AND created_at >= ?`;
       params.push(startDate);
     }
 
     if (endDate) {
-      query += ` AND created_at <= $${paramIndex++}`;
+      sql += ` AND created_at <= ?`;
       params.push(endDate);
     }
 
-    query += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+    sql += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
     params.push(limit, offset);
 
-    const result = await query(query, params);
+    const result = await query(sql, params);
     return result.rows;
   }
 
@@ -247,20 +245,20 @@ class AdminService {
 
       let dateFilter: string;
       if (metricType === 'DAILY') {
-        dateFilter = 'DATE(created_at) = DATE($1)';
+        dateFilter = "date(created_at) = date(?)";
       } else {
-        dateFilter = 'DATE_TRUNC(\'hour\', created_at) = DATE_TRUNC(\'hour\', $1)';
+        dateFilter = "strftime('%Y-%m-%d %H:00:00', created_at) = strftime('%Y-%m-%d %H:00:00', ?)";
       }
 
-      // Generate overall metrics
+      // Generate overall metrics (from api_usage)
       const overallResult = await query(
         `SELECT 
           COUNT(*) as total_requests,
           COUNT(CASE WHEN status_code < 400 THEN 1 END) as successful_requests,
           COUNT(CASE WHEN status_code >= 400 THEN 1 END) as failed_requests,
-          AVG(response_time_ms) as avg_response_time_ms,
+          AVG(response_time) as avg_response_time_ms,
           COUNT(DISTINCT user_id) as unique_users
-        FROM usage_logs 
+        FROM api_usage 
         WHERE ${dateFilter}`,
         [date]
       );
@@ -271,22 +269,15 @@ class AdminService {
         `INSERT INTO metrics_rollup (
           date, metric_type, total_requests, successful_requests, failed_requests,
           avg_response_time_ms, unique_users
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (date, metric_type, endpoint)
-        DO UPDATE SET 
-          total_requests = EXCLUDED.total_requests,
-          successful_requests = EXCLUDED.successful_requests,
-          failed_requests = EXCLUDED.failed_requests,
-          avg_response_time_ms = EXCLUDED.avg_response_time_ms,
-          unique_users = EXCLUDED.unique_users`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           date,
           metricType,
-          parseInt(overall.total_requests),
-          parseInt(overall.successful_requests),
-          parseInt(overall.failed_requests),
+          Number(overall.total_requests),
+          Number(overall.successful_requests),
+          Number(overall.failed_requests),
           Math.round(parseFloat(overall.avg_response_time_ms) || 0),
-          parseInt(overall.unique_users)
+          Number(overall.unique_users)
         ]
       );
 
@@ -297,9 +288,9 @@ class AdminService {
           COUNT(*) as total_requests,
           COUNT(CASE WHEN status_code < 400 THEN 1 END) as successful_requests,
           COUNT(CASE WHEN status_code >= 400 THEN 1 END) as failed_requests,
-          AVG(response_time_ms) as avg_response_time_ms,
+          AVG(response_time) as avg_response_time_ms,
           COUNT(DISTINCT user_id) as unique_users
-        FROM usage_logs 
+        FROM api_usage 
         WHERE ${dateFilter}
         GROUP BY endpoint`,
         [date]
@@ -310,23 +301,16 @@ class AdminService {
           `INSERT INTO metrics_rollup (
             date, metric_type, endpoint, total_requests, successful_requests, failed_requests,
             avg_response_time_ms, unique_users
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          ON CONFLICT (date, metric_type, endpoint)
-          DO UPDATE SET 
-            total_requests = EXCLUDED.total_requests,
-            successful_requests = EXCLUDED.successful_requests,
-            failed_requests = EXCLUDED.failed_requests,
-            avg_response_time_ms = EXCLUDED.avg_response_time_ms,
-            unique_users = EXCLUDED.unique_users`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             date,
             metricType,
             endpoint.endpoint,
-            parseInt(endpoint.total_requests),
-            parseInt(endpoint.successful_requests),
-            parseInt(endpoint.failed_requests),
+            Number(endpoint.total_requests),
+            Number(endpoint.successful_requests),
+            Number(endpoint.failed_requests),
             Math.round(parseFloat(endpoint.avg_response_time_ms) || 0),
-            parseInt(endpoint.unique_users)
+            Number(endpoint.unique_users)
           ]
         );
       }
@@ -343,24 +327,24 @@ class AdminService {
     metricType: 'DAILY' | 'HOURLY' = 'DAILY',
     endpoint?: string
   ): Promise<MetricsRollup[]> {
-    let query = `
+    let queryStr = `
       SELECT id, date, metric_type, endpoint, total_requests, successful_requests,
              failed_requests, avg_response_time_ms, unique_users, created_at
       FROM metrics_rollup
-      WHERE date >= $1 AND date <= $2 AND metric_type = $3
+      WHERE date >= ? AND date <= ? AND metric_type = ?
     `;
     const params: any[] = [startDate, endDate, metricType];
 
     if (endpoint) {
-      query += ' AND endpoint = $4';
+      queryStr += ' AND endpoint = ?';
       params.push(endpoint);
     } else {
-      query += ' AND endpoint IS NULL';
+      queryStr += ' AND endpoint IS NULL';
     }
 
-    query += ' ORDER BY date ASC';
+    queryStr += ' ORDER BY date ASC';
 
-    const result = await query(query, params);
+    const result = await query(queryStr, params);
     return result.rows;
   }
 
@@ -374,7 +358,7 @@ class AdminService {
   ): Promise<SystemHealth> {
     const result = await query(
       `INSERT INTO system_health (component, status, response_time_ms, error_message, metadata)
-       VALUES ($1, $2, $3, $4, $5)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT (component)
        DO UPDATE SET 
          status = EXCLUDED.status,
@@ -478,7 +462,7 @@ class AdminService {
 
         return {
            allowed,
-           remaining: Math.max(0, maxRequests - requestsCount - (allowed ? 1 : 0)),
+           remaining: Math.max(0, limitPerWindow - requestsCount - (allowed ? 1 : 0)),
            resetTime
          };
       });
@@ -496,7 +480,7 @@ class AdminService {
   ): Promise<AdminNotification> {
     const result = await query(
       `INSERT INTO admin_notifications (type, title, message, metadata)
-       VALUES ($1, $2, $3, $4)
+       VALUES (?, ?, ?, ?)
        RETURNING id, type, title, message, is_read, created_at, read_at, metadata`,
       [type, title, message, metadata ? JSON.stringify(metadata) : null]
     );
@@ -509,76 +493,76 @@ class AdminService {
     offset: number = 0,
     unreadOnly: boolean = false
   ): Promise<AdminNotification[]> {
-    let query = `
+    let sql = `
       SELECT id, type, title, message, is_read, created_at, read_at, metadata
       FROM admin_notifications
     `;
     const params: any[] = [];
 
     if (unreadOnly) {
-      query += ' WHERE is_read = false';
+      sql += ' WHERE is_read = false';
     }
 
-    query += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    sql += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
     params.push(limit, offset);
 
-    const result = await query(query, params);
+    const result = await dbQuery(sql, params);
     return result.rows;
   }
 
   async markNotificationAsRead(notificationId: string): Promise<void> {
-    const result = await query(
+    const result = await dbQuery(
       `UPDATE admin_notifications 
        SET is_read = true, read_at = CURRENT_TIMESTAMP
-       WHERE id = $1`,
+       WHERE id = ?`,
       [notificationId]
     );
 
-    if (result.rowCount === 0) {
-      throw createError(404, 'Notification not found');
+    if ((result as any).rowCount === 0) {
+      throw createError('Notification not found', 404);
     }
   }
 
   // System Statistics
   async getSystemStats(): Promise<SystemStats> {
-    const result = await query(`
+    const result = await dbQuery(`
       SELECT 
         (SELECT COUNT(*) FROM users WHERE status = 'ACTIVE') as total_users,
-        (SELECT COUNT(DISTINCT user_id) FROM usage_logs WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours') as active_users_24h,
-        (SELECT COUNT(*) FROM usage_logs WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours') as total_requests_24h,
-        (SELECT COALESCE(AVG(response_time_ms), 0) FROM usage_logs WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours') as avg_response_time_24h,
-        (SELECT COALESCE(COUNT(CASE WHEN status_code >= 400 THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 0) FROM usage_logs WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours') as error_rate_24h,
+        (SELECT COUNT(DISTINCT user_id) FROM api_usage WHERE created_at >= now() - interval '24 hours') as active_users_24h,
+        (SELECT COUNT(*) FROM api_usage WHERE created_at >= now() - interval '24 hours') as total_requests_24h,
+        (SELECT COALESCE(AVG(response_time), 0) FROM api_usage WHERE created_at >= now() - interval '24 hours') as avg_response_time_24h,
+        (SELECT COALESCE(COUNT(CASE WHEN status_code >= 400 THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 0) FROM api_usage WHERE created_at >= now() - interval '24 hours') as error_rate_24h,
         (SELECT COUNT(*) FROM portfolios WHERE is_active = true) as total_portfolios,
         (SELECT COUNT(*) FROM positions WHERE quantity > 0) as total_positions,
         (SELECT COUNT(*) FROM chat_threads WHERE status = 'ACTIVE') as total_chat_threads,
         (SELECT COUNT(*) FROM inquiries) as total_inquiries,
-        (SELECT ROUND(pg_database_size(current_database()) / 1024.0 / 1024.0, 2)) as database_size_mb
+        (SELECT 0) as database_size_mb
     `);
 
     const stats = result.rows[0];
 
     // Calculate uptime percentage (simplified - based on system health checks)
-    const uptimeResult = await query(`
+    const uptimeResult = await dbQuery(`
       SELECT 
         COUNT(CASE WHEN status = 'HEALTHY' THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0) as uptime_percentage
       FROM system_health
-      WHERE last_check >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+      WHERE last_check >= now() - interval '24 hours'
     `);
 
     const uptimePercentage = uptimeResult.rows[0]?.uptime_percentage || 100;
 
     return {
-      total_users: parseInt(stats.total_users),
-      active_users_24h: parseInt(stats.active_users_24h),
-      total_requests_24h: parseInt(stats.total_requests_24h),
-      avg_response_time_24h: Math.round(parseFloat(stats.avg_response_time_24h)),
-      error_rate_24h: parseFloat(stats.error_rate_24h),
-      total_portfolios: parseInt(stats.total_portfolios),
-      total_positions: parseInt(stats.total_positions),
-      total_chat_threads: parseInt(stats.total_chat_threads),
-      total_inquiries: parseInt(stats.total_inquiries),
-      database_size_mb: parseFloat(stats.database_size_mb),
-      uptime_percentage: parseFloat(uptimePercentage)
+      total_users: Number(stats.total_users),
+      active_users_24h: Number(stats.active_users_24h),
+      total_requests_24h: Number(stats.total_requests_24h),
+      avg_response_time_24h: Math.round(Number(stats.avg_response_time_24h) || 0),
+      error_rate_24h: Number(stats.error_rate_24h),
+      total_portfolios: Number(stats.total_portfolios),
+      total_positions: Number(stats.total_positions),
+      total_chat_threads: Number(stats.total_chat_threads),
+      total_inquiries: Number(stats.total_inquiries),
+      database_size_mb: Number(stats.database_size_mb),
+      uptime_percentage: Number(uptimePercentage)
     };
   }
 
@@ -586,7 +570,7 @@ class AdminService {
     limit: number = 50,
     offset: number = 0
   ): Promise<UserActivity[]> {
-    const result = await query(`
+    const result = await dbQuery(`
       SELECT 
         u.id as user_id,
         u.email,
@@ -665,7 +649,7 @@ class AdminService {
 
   // GPT Configuration Management
   async getGptConfigs(): Promise<GptConfig[]> {
-    const result = await query(`
+    const result = await dbQuery(`
       SELECT id, provider, api_key, model, is_active, max_tokens, temperature, created_at, updated_at
       FROM gpt_configs
       ORDER BY provider, created_at DESC
@@ -674,14 +658,14 @@ class AdminService {
   }
 
   async createGptConfig(config: Omit<GptConfig, 'id' | 'created_at' | 'updated_at'>): Promise<GptConfig> {
-    const result = await query(`
+    const result = await dbQuery(`
       INSERT INTO gpt_configs (provider, api_key, model, is_active, max_tokens, temperature)
       VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING id, provider, api_key, model, is_active, max_tokens, temperature, created_at, updated_at
     `, [config.provider, config.api_key, config.model, config.is_active ?? true, config.max_tokens, config.temperature]);
     
     if (result.rows.length === 0) {
-      throw createError(500, 'Failed to create GPT configuration');
+      throw createError('Failed to create GPT configuration', 500);
     }
     
     return result.rows[0];
@@ -718,13 +702,13 @@ class AdminService {
     }
 
     if (setParts.length === 0) {
-      throw createError(400, 'No fields to update');
+      throw createError('No fields to update', 400);
     }
 
     setParts.push(`updated_at = NOW()`);
     values.push(id);
 
-    const result = await query(`
+    const result = await dbQuery(`
       UPDATE gpt_configs 
       SET ${setParts.join(', ')}
       WHERE id = $${paramIndex}
@@ -732,7 +716,7 @@ class AdminService {
     `, values);
 
     if (result.rows.length === 0) {
-      throw createError(404, 'GPT configuration not found');
+      throw createError('GPT configuration not found', 404);
     }
 
     return result.rows[0];
@@ -742,13 +726,13 @@ class AdminService {
     const result = await query('DELETE FROM gpt_configs WHERE id = $1', [id]);
     
     if (result.rowCount === 0) {
-      throw createError(404, 'GPT configuration not found');
+      throw createError('GPT configuration not found', 404);
     }
   }
 
   // System Settings Management
   async getSystemSettings(): Promise<SystemSettings[]> {
-    const result = await query(`
+    const result = await dbQuery(`
       SELECT key, value, category, updated_at
       FROM system_settings
       ORDER BY category, key
@@ -757,7 +741,7 @@ class AdminService {
   }
 
   async updateSystemSetting(key: string, value: string, category?: string): Promise<SystemSettings> {
-    const result = await query(`
+    const result = await dbQuery(`
       INSERT INTO system_settings (key, value, category, updated_at)
       VALUES ($1, $2, $3, NOW())
       ON CONFLICT (key) DO UPDATE SET
@@ -768,7 +752,7 @@ class AdminService {
     `, [key, value, category]);
     
     if (result.rows.length === 0) {
-      throw createError(500, 'Failed to update system setting');
+      throw createError('Failed to update system setting', 500);
     }
     
     return result.rows[0];

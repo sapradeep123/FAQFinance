@@ -1,22 +1,17 @@
 import dotenv from 'dotenv';
-import path from 'path';
 
-// Load environment variables from .env file
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+// Load environment variables
+dotenv.config();
 
+// Configuration interface
 interface Config {
   // Server Configuration
   PORT: number;
   NODE_ENV: string;
   
   // Database Configuration
-  DATABASE_URL: string;
-  DB_HOST: string;
-  DB_PORT: number;
-  DB_NAME: string;
-  DB_USER: string;
-  DB_PASSWORD: string;
-  DB_SSL: boolean;
+  USE_SQLITE: boolean;
+  DATABASE_URL?: string;
   
   // JWT Configuration
   JWT_SECRET: string;
@@ -56,46 +51,14 @@ interface Config {
   LOG_LEVEL: string;
 }
 
-// Parse DATABASE_URL if provided, otherwise use individual DB config
-function parseDatabaseConfig() {
-  const databaseUrl = process.env.DATABASE_URL;
-  
-  if (databaseUrl) {
-    try {
-      const url = new URL(databaseUrl);
-      return {
-        DB_HOST: url.hostname,
-        DB_PORT: parseInt(url.port) || 5432,
-        DB_NAME: url.pathname.slice(1), // Remove leading slash
-        DB_USER: url.username,
-        DB_PASSWORD: url.password,
-        DB_SSL: url.searchParams.get('sslmode') === 'require'
-      };
-    } catch (error) {
-      console.warn('Invalid DATABASE_URL format, falling back to individual DB config');
-    }
-  }
-  
-  return {
-    DB_HOST: process.env.DB_HOST || 'localhost',
-    DB_PORT: parseInt(process.env.DB_PORT || '5432'),
-    DB_NAME: process.env.DB_NAME || 'financial_advisory_platform',
-    DB_USER: process.env.DB_USER || 'postgres',
-    DB_PASSWORD: process.env.DB_PASSWORD || 'postgres',
-    DB_SSL: process.env.DB_SSL === 'true'
-  };
-}
-
-const dbConfig = parseDatabaseConfig();
-
 export const config: Config = {
   // Server Configuration
   PORT: parseInt(process.env.PORT || '5000'),
   NODE_ENV: process.env.NODE_ENV || 'development',
   
   // Database Configuration
-  DATABASE_URL: process.env.DATABASE_URL || `postgres://${dbConfig.DB_USER}:${dbConfig.DB_PASSWORD}@${dbConfig.DB_HOST}:${dbConfig.DB_PORT}/${dbConfig.DB_NAME}`,
-  ...dbConfig,
+  USE_SQLITE: process.env.USE_SQLITE === 'true' || (!process.env.DATABASE_URL),
+  DATABASE_URL: process.env.DATABASE_URL,
   
   // JWT Configuration
   JWT_SECRET: process.env.JWT_SECRET || 'fallback-jwt-secret-change-in-production',
@@ -138,11 +101,7 @@ export const config: Config = {
 // Validate required configuration
 function validateConfig() {
   const requiredFields = [
-    'JWT_SECRET',
-    'DB_HOST',
-    'DB_NAME',
-    'DB_USER',
-    'DB_PASSWORD'
+    'JWT_SECRET'
   ];
   
   const missingFields = requiredFields.filter(field => {
@@ -166,12 +125,12 @@ validateConfig();
 
 // Export individual config sections for convenience
 export const dbConfig = {
-  host: config.DB_HOST,
-  port: config.DB_PORT,
-  database: config.DB_NAME,
-  user: config.DB_USER,
-  password: config.DB_PASSWORD,
-  ssl: config.DB_SSL
+  useSQLite: config.USE_SQLITE
+};
+
+export const serverConfig = {
+  port: config.PORT,
+  nodeEnv: config.NODE_ENV
 };
 
 export const jwtConfig = {
@@ -182,18 +141,34 @@ export const jwtConfig = {
 };
 
 export const corsConfig = {
-  origin: config.CORS_ORIGIN,
-  credentials: true,
-  optionsSuccessStatus: 200
+  origin: config.CORS_ORIGIN
+};
+
+export const uploadConfig = {
+  maxFileSize: config.MAX_FILE_SIZE,
+  uploadDir: config.UPLOAD_DIR
 };
 
 export const rateLimitConfig = {
   windowMs: config.RATE_LIMIT_WINDOW_MS,
-  max: config.RATE_LIMIT_MAX_REQUESTS,
-  message: {
-    error: 'Too many requests from this IP, please try again later.',
-    retryAfter: Math.ceil(config.RATE_LIMIT_WINDOW_MS / 1000)
-  },
-  standardHeaders: true,
-  legacyHeaders: false
+  maxRequests: config.RATE_LIMIT_MAX_REQUESTS
+};
+
+export const securityConfig = {
+  bcryptRounds: config.BCRYPT_ROUNDS
+};
+
+export const adminConfig = {
+  email: config.ADMIN_EMAIL,
+  password: config.ADMIN_PASSWORD
+};
+
+export const featureConfig = {
+  enableMockData: config.ENABLE_MOCK_DATA,
+  enableRateLimiting: config.ENABLE_RATE_LIMITING,
+  enableLogging: config.ENABLE_LOGGING
+};
+
+export const loggingConfig = {
+  level: config.LOG_LEVEL
 };

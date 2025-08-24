@@ -1,70 +1,105 @@
 import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+import { config } from '../config/config';
+import { createError } from './errorHandler';
 
-export interface AppError extends Error {
-  statusCode?: number;
-  isOperational?: boolean;
+// Custom error class for application errors
+export class AppError extends Error {
+  public statusCode: number;
+  public isOperational: boolean;
+
+  constructor(message: string, statusCode: number) {
+    super(message);
+    this.statusCode = statusCode;
+    this.isOperational = true;
+
+    Error.captureStackTrace(this, this.constructor);
+  }
 }
 
-export const createError = (message: string, statusCode: number = 500): AppError => {
-  const error: AppError = new Error(message);
-  error.statusCode = statusCode;
-  error.isOperational = true;
-  return error;
+// Create error with status code
+export const createError = (message: string, statusCode: number): AppError => {
+  return new AppError(message, statusCode);
 };
 
-export const errorHandler = (err: AppError, req: Request, res: Response, next: NextFunction): void => {
-  let { statusCode = 500, message } = err;
+// Global error handling middleware
+export const errorHandler = (
+  err: any,
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  let error = { ...err };
+  error.message = err.message;
 
-  // Log error details
-  console.error('❌ Error occurred:', {
+  // Log error
+  console.error('Error:', {
     message: err.message,
-    statusCode,
     stack: err.stack,
     url: req.url,
     method: req.method,
     ip: req.ip,
-    userAgent: req.get('User-Agent'),
-    timestamp: new Date().toISOString()
+    userAgent: req.get('User-Agent')
   });
 
-  // Handle specific error types
+  // JWT errors
+  if (err instanceof jwt.JsonWebTokenError) {
+    error = createError('Invalid token', 401);
+  } else if (err instanceof jwt.TokenExpiredError) {
+    error = createError('Token expired', 401);
+  } else if (err instanceof jwt.NotBeforeError) {
+    error = createError('Token not active', 401);
+  }
+
+  // Database errors
+  if (err.code === 'SQLITE_CONSTRAINT') {
+    if (err.message.includes('UNIQUE constraint failed')) {
+      error = createError('Resource already exists', 409);
+    } else if (err.message.includes('FOREIGN KEY constraint failed')) {
+      error = createError('Referenced resource does not exist', 400);
+    } else if (err.message.includes('NOT NULL constraint failed')) {
+      error = createError('Required field is missing', 400);
+    } else {
+      error = createError('Database constraint violation', 400);
+    }
+  }
+
+  // Validation errors
   if (err.name === 'ValidationError') {
-    statusCode = 400;
-    message = 'Validation Error';
-  } else if (err.name === 'UnauthorizedError' || err.message.includes('jwt')) {
-    statusCode = 401;
-    message = 'Unauthorized';
-  } else if (err.name === 'CastError') {
-    statusCode = 400;
-    message = 'Invalid data format';
-  } else if (err.code === '23505') { // PostgreSQL unique violation
-    statusCode = 409;
-    message = 'Resource already exists';
-  } else if (err.code === '23503') { // PostgreSQL foreign key violation
-    statusCode = 400;
-    message = 'Invalid reference';
-  } else if (err.code === '23502') { // PostgreSQL not null violation
-    statusCode = 400;
-    message = 'Required field missing';
+    const message = Object.values(err.errors).map((val: any) => val.message).join(', ');
+    error = createError(message, 400);
   }
 
-  // Don't leak error details in production
-  const isDevelopment = process.env.NODE_ENV === 'development';
-  
-  const errorResponse: any = {
-    error: message,
-    statusCode,
-    timestamp: new Date().toISOString(),
-    path: req.url,
-    method: req.method
-  };
-
-  if (isDevelopment) {
-    errorResponse.stack = err.stack;
-    errorResponse.details = err.message;
+  // Cast errors (usually from invalid ObjectId)
+  if (err.name === 'CastError') {
+    error = createError('Invalid resource identifier', 400);
   }
 
-  res.status(statusCode).json(errorResponse);
+  // Duplicate key errors
+  if (err.code === 11000) {
+    error = createError('Resource already exists', 409);
+  }
+
+  // Default error
+  if (!error.statusCode) {
+    error.statusCode = 500;
+    error.message = 'Internal server error';
+  }
+
+  // Send error response
+  res.status(error.statusCode).json({
+    success: false,
+    error: {
+      message: error.message,
+      ...(config.NODE_ENV === 'development' && { stack: err.stack })
+    }
+  });
+};
+
+// 404 handler for undefined routes
+export const notFound = (req: Request, res: Response, next: NextFunction) => {
+  const error = createError(`Route ${req.originalUrl} not found`, 404);
+  next(error);
 };
 
 // Async error wrapper
@@ -72,10 +107,4 @@ export const asyncHandler = (fn: Function) => {
   return (req: Request, res: Response, next: NextFunction) => {
     Promise.resolve(fn(req, res, next)).catch(next);
   };
-};
-
-// 404 handler
-export const notFoundHandler = (req: Request, res: Response, next: NextFunction): void => {
-  const error = createError(`Route ${req.originalUrl} not found`, 404);
-  next(error);
 };
